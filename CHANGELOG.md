@@ -1,3 +1,9 @@
+## 1.1.0 (2026-10-19)
+
+### Features
+
+- Add GR III HDF and GR IIIx HDF. They run the GR III 2.10 and GR IIIx 1.60 firmware and use the same packages. GRKit has not been tested on these cameras.
+
 ## 1.0.0 (2026-10-19)
 
 ### Features
