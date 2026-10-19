@@ -71,7 +71,7 @@ export function App() {
       const effects = plan.includeEffects
         ? (await loadCatalog(support.target)).effects.filter((effect) => selection.has(effect.id))
         : [];
-      const blob = await buildPackage(support.target, camera.id, effects, plan.omitted, language);
+      const blob = await buildPackage(support.target, support.package, effects, plan.omitted, language);
       if (run === buildRun.current) {
         save(blob, 'GRKit.zip');
         setBuild({ state: 'ready' });
