@@ -13,7 +13,7 @@ export type RichText = readonly string[];
 const en = {
   language: 'Language',
   /** The document title. */
-  title: 'Soft — GR IIIx Builder',
+  title: 'Soft — GR Builder',
   /** The hero line under the GRKit heading. */
   lead: 'New features for RICOH GR. No firmware flashing.',
   camera: 'Camera',
