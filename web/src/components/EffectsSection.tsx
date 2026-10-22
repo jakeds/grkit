@@ -16,6 +16,7 @@ import { forget, preview, type PreviewEffect, type Source } from '../preview/ren
 import { DEFAULT_SAMPLE } from '../preview/samples';
 import { PhotoLoader } from '../preview/raw';
 import { STOCKS } from '../stocks';
+import { DEFAULT_SELECTION, EVERYDAY_LOOKS } from '../curated';
 import { EffectIcon } from './EffectIcon';
 import { ErrorBoundary } from './ErrorBoundary';
 
@@ -35,7 +36,7 @@ interface Props {
 
 export function EffectsSection({ strings: t, selection, onSelectionChange }: Props) {
   const catalog = use(loadCatalog(PREVIEW_TARGET));
-  const effects = catalog.effects;
+  const effects = [...DEFAULT_SELECTION.flatMap(id => catalog.effects.filter(effect => effect.id === id)), ...catalog.effects.filter(effect => !DEFAULT_SELECTION.includes(effect.id))];
   const [previewId, setPreviewId] = useState(DEFAULT_PREVIEW);
   const [source, setSource] = useState<Source>(DEFAULT_SAMPLE);
   const photo = useRef<Source | null>(null);
@@ -111,6 +112,7 @@ export function EffectsSection({ strings: t, selection, onSelectionChange }: Pro
 
   return (
     <div className="section-body" ref={ownPhoto}>
+      <p className="note">Six everyday looks to start. Preview a look, then tick it to keep it.</p>
       <div className="preview-row">
         <div className="viewer">
           {shown && (
@@ -192,8 +194,8 @@ export function EffectsSection({ strings: t, selection, onSelectionChange }: Pro
               {t.useSample}
             </button>
           )}
-          <p className="note">{t.uploadNote}</p>
-          <p className="note">{t.previewNote}</p>
+          <p className="note">DNG only. Photos stay in your browser.</p>
+
           {source === DEFAULT_SAMPLE && (
             <p className="note">
               <a
@@ -210,11 +212,10 @@ export function EffectsSection({ strings: t, selection, onSelectionChange }: Pro
 
       <div className="toolbar">
         <p>
-          {t.count(MAX_EFFECTS)[0]}
-          <span className="count">{selection.size}</span>
-          {t.count(MAX_EFFECTS)[1]}
+          <span className="count">{selection.size}</span> of {effects.length} looks included
         </p>
         <div>
+          <button type="button" className="button" onClick={() => onSelectionChange(new Set(DEFAULT_SELECTION))}>Everyday six</button>
           <button
             type="button"
             className="button"
@@ -230,65 +231,21 @@ export function EffectsSection({ strings: t, selection, onSelectionChange }: Pro
         </div>
       </div>
 
-      <div className="table-box">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col" style={{ width: 44 }}>
-                <span className="visually-hidden">{t.include}</span>
-              </th>
-              <th scope="col" style={{ width: 56 }}>
-                {t.icon}
-              </th>
-              <th scope="col">{t.effect}</th>
-              <th scope="col">{t.look}</th>
-              <th scope="col">{t.type}</th>
-              <th scope="col" style={{ width: 88 }}>
-                <span className="visually-hidden">{t.preview}</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {effects.map((effect) => (
-              <tr key={effect.id}>
-                <td>
-                  <input
-                    id={`effect-${effect.id}`}
-                    type="checkbox"
-                    checked={selection.has(effect.id)}
-                    disabled={!selection.has(effect.id) && selection.size >= MAX_EFFECTS}
-                    onChange={() => toggle(effect)}
-                  />
-                </td>
-                <td>
-                  <EffectIcon effect={effect} />
-                </td>
-                <td>
-                  <label htmlFor={`effect-${effect.id}`} className="effect-name">
-                    {effect.name}
-                  </label>
-                  {STOCKS[effect.id] && (
-                    <span className="effect-stock">{stockText(STOCKS[effect.id]!, t)}</span>
-                  )}
-                </td>
-                <td>{t.looks[effect.id] ?? effect.look}</td>
-                <td>{effect.monochrome ? t.mono : t.color}</td>
-                <td>
-                  <button
-                    type="button"
-                    className="button small"
-                    aria-pressed={effect.id === shown?.id}
-                    aria-label={t.previewOf(effect.name)}
-                    onClick={() => showEffect(effect)}
-                  >
-                    {t.preview}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {[false, true].map(other => {
+        const list = <div className="look-list">{effects.filter(effect => DEFAULT_SELECTION.includes(effect.id) !== other).map(effect => (
+          <article className={`look-choice ${selection.has(effect.id) ? 'included' : ''}`} key={effect.id}>
+            <input id={`effect-${effect.id}`} type="checkbox" checked={selection.has(effect.id)} onChange={() => toggle(effect)} />
+            <EffectIcon effect={effect} />
+            <div className="look-copy">
+              <label htmlFor={`effect-${effect.id}`} className="effect-name">{effect.name}</label>
+              <p>{EVERYDAY_LOOKS[effect.id as keyof typeof EVERYDAY_LOOKS] ?? t.looks[effect.id] ?? effect.look}</p>
+              {STOCKS[effect.id] && <span className="effect-stock">{stockText(STOCKS[effect.id]!, t)}</span>}
+            </div>
+            <button type="button" className="button small" aria-pressed={effect.id === shown?.id} aria-label={t.previewOf(effect.name)} onClick={() => showEffect(effect)}>{t.preview}</button>
+          </article>
+        ))}</div>;
+        return other ? <details className="more-looks" key="other"><summary>More looks <span>{effects.length - DEFAULT_SELECTION.length} to explore · {effects.filter(effect => !DEFAULT_SELECTION.includes(effect.id) && selection.has(effect.id)).length} included</span></summary>{list}</details> : <div key="everyday">{list}</div>;
+      })}
     </div>
   );
 }

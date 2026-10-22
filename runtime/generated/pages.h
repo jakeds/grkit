@@ -10,7 +10,17 @@
 #include "../plugins/guides/page.h"
 #include "../plugins/date-stamp/page.h"
 #include "../plugins/grain/page.h"
+#include "../plugins/bloom/page.h"
+#include "../plugins/halation/page.h"
+#include "../plugins/black-floor/page.h"
+#include "../plugins/split-toning/page.h"
+#include "../plugins/colour-range/page.h"
+#include "../plugins/colour-saturation/page.h"
+#include "../plugins/colour-hue/page.h"
+#include "../plugins/colour-brightness/page.h"
+#include "../plugins/highlight-rolloff/page.h"
+#include "../plugins/soft-shortcut/page.h"
 
-#define PLUGIN_PAGES IMAGE_CONTROL_PAGE, FRAMING_PAGE, GUIDES_PAGE, DATE_STAMP_PAGE, GRAIN_PAGE
+#define PLUGIN_PAGES IMAGE_CONTROL_PAGE, FRAMING_PAGE, GUIDES_PAGE, DATE_STAMP_PAGE, GRAIN_PAGE, BLOOM_PAGE, HALATION_PAGE, BLACK_FLOOR_PAGE, SPLIT_TONING_PAGE, COLOUR_RANGE_PAGE, COLOUR_SATURATION_PAGE, COLOUR_HUE_PAGE, COLOUR_BRIGHTNESS_PAGE, HIGHLIGHT_ROLLOFF_PAGE, SOFT_SHORTCUT_PAGE
 
 #endif

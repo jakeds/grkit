@@ -434,11 +434,11 @@ fn runtime_layout_matches_target_capacity() {
     assert_eq!(runtime::MAX_COUNT, 20);
     assert_eq!(
         runtime::layout(0).unwrap(),
-        json!({"words": 38498, "icon_words": [32040]})
+        json!({"words": 40306, "icon_words": [32040]})
     );
     assert_eq!(
         runtime::layout(20).unwrap(),
-        json!({"words": 47778, "icon_words": [64080]})
+        json!({"words": 49586, "icon_words": [64080]})
     );
     assert!(runtime::layout(21).is_err());
 }
@@ -457,7 +457,7 @@ fn allocation_includes_host_icons_at_chunk_boundaries() {
         // Picture scratch (the date stamp masks, then the shot ring), then the menu text.
         assert_eq!(
             words * 4,
-            256 + count * 0x740 + 141376 + 72 + 12288,
+            320 + count * 0x740 + 141376 + 72 + 19456,
             "count {count}"
         );
         assert_eq!(
@@ -600,7 +600,7 @@ fn each_camera_gets_its_modeset_file_and_guide() {
 }
 
 #[test]
-fn the_guide_names_the_camera_once_and_the_modeset_file_once() {
+fn the_guide_names_the_camera_once_and_the_modeset_file_twice() {
     // installation_guide replaces these strings, so each must occur exactly once.
     for (language, guide) in [
         (
@@ -624,9 +624,10 @@ fn the_guide_names_the_camera_once_and_the_modeset_file_once() {
         assert_eq!(guide.matches(&phrase).count(), 1, "{phrase}");
         // The phrase and the note that GR III HDF has not been tested.
         assert_eq!(guide.matches(camera::GR3.hdf).count(), 2, "{language:?}");
+        // After installation, and in the steps that turn SD scripts off.
         assert_eq!(
             guide.matches(camera::GR3.modeset).count(),
-            1,
+            2,
             "{language:?}"
         );
     }
@@ -738,7 +739,7 @@ fn a_gr4_package_has_its_modeset_file_guide_and_modules() {
         &runtime,
         &gr4_build(),
         &Files::new(),
-        Selection::ALL,
+        Selection::from_names(camera::GR4.plugins.iter().copied()).unwrap(),
         &camera::GR4,
         &english(),
     )
@@ -758,7 +759,7 @@ fn a_gr4_package_has_its_modeset_file_guide_and_modules() {
         &runtime_fixture(),
         &build(),
         &Files::new(),
-        Selection::ALL,
+        Selection::from_names(camera::GR4.plugins.iter().copied()).unwrap(),
         &camera::GR4,
         &english()
     )
@@ -768,7 +769,7 @@ fn a_gr4_package_has_its_modeset_file_guide_and_modules() {
         &runtime,
         &gr4_build(),
         &Files::from([effect("test-effect")]),
-        Selection::ALL,
+        Selection::from_names(camera::GR4.plugins.iter().copied()).unwrap(),
         &camera::GR4,
         &english(),
     )
@@ -798,4 +799,34 @@ fn a_gr4_package_has_its_modeset_file_guide_and_modules() {
         &english()
     )
     .is_err());
+}
+
+#[test]
+fn scripts_off_packages_hold_only_the_disable_command_and_its_key() {
+    for camera in camera::CAMERAS {
+        let bytes = assemble_scripts_off(camera).unwrap();
+        assert_eq!(bytes, assemble_scripts_off(camera).unwrap());
+        let files = unpack(&bytes);
+        let names: Vec<_> = files.keys().map(String::as_str).collect();
+        let mut expected = [
+            "SD_ROOT/DEVELOP.MOD".to_owned(),
+            format!("SD_ROOT/{}", camera.modeset),
+            "SHA256SUMS".to_owned(),
+        ];
+        expected.sort();
+        assert_eq!(
+            names,
+            expected.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            files[&format!("SD_ROOT/{}", camera.modeset)],
+            b"[SCRIPT_EN_MODE DIS]\r\n"
+        );
+        // The same key file as the activation, which only the command differs from.
+        let activation = runtime::activation_files(camera);
+        assert_eq!(files["SD_ROOT/DEVELOP.MOD"], activation["DEVELOP.MOD"]);
+        assert_eq!(activation[camera.modeset], b"[SCRIPT_EN_MODE EN]\r\n");
+        // It holds no GRKit code, so it is not a GRKit package.
+        assert!(verify_package(&bytes).is_err());
+    }
 }

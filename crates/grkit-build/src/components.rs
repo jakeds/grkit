@@ -15,7 +15,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 // DRAM there. The installer overwrites it without a stock-byte check. The
 // guards detect a firmware that extends the image into it.
 pub const TAIL_BASE: u32 = 0x540b6000;
-pub const TAIL_END: u32 = 0x540be000;
+pub const TAIL_END: u32 = 0x540c2000;
 const RTOS_EXECUTABLE_END: u32 = 0x55000000;
 pub const CONTEXTS: &[(u32, &str)] = &[
     (0x536dc124, "abfdffeb"),
@@ -32,7 +32,11 @@ pub const CONTEXTS: &[(u32, &str)] = &[
 ];
 /// The startup literals for the `.data` copy: source, destination, and size.
 /// Source plus size is the end of the RTOS image.
-const GR3_GUARDS: &[(u32, &str)] = &[(0x53000450, "40b507540000005580a00300")];
+const GR3_GUARDS: &[(u32, &str)] = &[
+    (0x53000450, "40b507540000005580a00300"),
+    // Native Open ADJ queues a controller change with the current return ID.
+    (0x532264ec, "0dc0a0e130d82de904b04ce22292ffeb7e92ffeb0050a0e1610900eb0040a0e10500a0e1cd0900eb0020a0e10214a0e30400a0e114d04be230689de82a19fdea"),
+];
 // Instructions replaced by the processing hook and replayed on its stock path.
 const PROCESSING_ORIGINAL: &str =
     "940d08e3f0cc08e3010545e301c545e37b9f86e201e190e74c0e08e3010545e3";
@@ -44,6 +48,9 @@ const PROCESSING_HOOKS: &[(u32, &str, bool)] = &[
     (0x536e87c4, "module_gamma_curves", true),
 ];
 pub const MENU_HOOKS: &[(u32, &str, &str)] = &[
+    // Opt-in shortcut only: separate point, omitted packages install neither hook.
+    (0x531771c0, "menu_live_event", "0dc0a0e1"),
+    (0x5317696c, "menu_live_start", "0dc0a0e1"),
     (0x531a48f0, "menu_native_touch_0", "f431d0e5"),
     (0x531a4904, "menu_native_touch_1", "f431d0e5"),
     (0x531a4918, "menu_native_touch_2", "f431d0e5"),
@@ -118,10 +125,15 @@ pub const PICTURE_HOOKS: &[(u32, &str, &str, bool)] = &[
     // PentaxMakernoteEntryDataSetter, tag 0x4f (ImageTone): the effect code of
     // the shot.
     (0x53608080, "picture_capture_tone", "e1fdfeeb", true),
+    // Maker-note Image Control adjustments of the captured shot, tag 0x247.
+    (0x536078f4, "picture_capture_parameters", "3302ffeb", true),
     // DigitalFilterProcess SetEffectParameter (0x5350304c): the Particle load,
     // then the BL to the stage gate (0x535131c0, plan +0x24).
     (0x535031b0, "grain_particle", "9537d5e5", true),
     (0x5351361c, "grain_gate", "e7feffeb", true),
+    // Native Granulation amplitude and noise-generator seed (GR IIIx 1.60 verified).
+    (0x5367ae28, "grain_amplitude", "020055e3", false),
+    (0x5368a970, "grain_seed", "4c001be5", true),
 ];
 
 /// The native parameter page edits the Fn adjustments of a GRKit effect
@@ -205,6 +217,7 @@ pub fn point_of(symbol: &str) -> Result<Point> {
         "menu_playback_detail",
         "picture_post",
         "picture_capture_tone",
+        "picture_capture_parameters",
     ];
     const OVERLAY: &[&str] = &[
         "framing_update",
@@ -219,6 +232,8 @@ pub fn point_of(symbol: &str) -> Result<Point> {
             || symbol.starts_with("menu_parameter_")
         {
             Point::Tuning
+        } else if symbol == "menu_live_event" || symbol == "menu_live_start" {
+            Point::ShootingShortcut
         } else if OVERLAY.contains(&symbol) {
             Point::ViewfinderOverlay
         } else if symbol.starts_with("menu_") {
@@ -272,10 +287,10 @@ pub struct Layout {
 pub const GR3_LAYOUT: Layout = Layout {
     define: "-DGRKIT_TARGET_GR3_210",
     tail: (TAIL_BASE, TAIL_END),
-    processing: Some((0x540b6100, 0x540b6900)),
+    processing: Some((0x540b6100, 0x540b6400)),
     processing_source: include_str!("../../../runtime/processing.S"),
-    menu: (0x540b6900, 0x540b9000),
-    framing: Some((0x540b9000, TAIL_END)),
+    menu: (0x540b6400, 0x540ba400),
+    framing: Some((0x540ba400, TAIL_END)),
     contexts: CONTEXTS,
     processing_hooks: PROCESSING_HOOKS,
     menu_hooks: MENU_HOOKS,
@@ -354,6 +369,7 @@ const GR4_PICTURE_HOOKS: &[Hook] = &[
     (0x537034b4, "picture_encode_entry", "0dc0a0e1", false),
     // The ImageTone call of the maker-note setter.
     (0x53810804, "picture_capture_tone", "1a37ffeb", true),
+    (0x53810080, "picture_capture_parameters", "6a3bffeb", true),
     // DigitalFilterProcess SetEffectParameter (0x53701c40): the grain on,
     // strength, and size loads, then the BL to the stage gate (0x537150fc,
     // plan +0x25).

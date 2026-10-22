@@ -9,13 +9,23 @@ export const PLUGINS = [
   { key: 'guides', plugin: 'guides', needsEffects: false },
   { key: 'dateStamp', plugin: 'date-stamp', needsEffects: false },
   { key: 'grain', plugin: 'grain', needsEffects: false },
+  { key: 'bloom', plugin: 'bloom', needsEffects: false },
+  { key: 'halation', plugin: 'halation', needsEffects: false },
+  { key: 'blackFloor', plugin: 'black-floor', needsEffects: false },
+  { key: 'splitToning', plugin: 'split-toning', needsEffects: false },
+  { key: 'colourRange', plugin: 'colour-range', needsEffects: false },
+  { key: 'colourSaturation', plugin: 'colour-saturation', needsEffects: false },
+  { key: 'colourHue', plugin: 'colour-hue', needsEffects: false },
+  { key: 'colourBrightness', plugin: 'colour-brightness', needsEffects: false },
+  { key: 'highlightRolloff', plugin: 'highlight-rolloff', needsEffects: false },
+  { key: 'softShortcut', plugin: 'soft-shortcut', needsEffects: false },
 ] as const;
 
 export type PluginKey = (typeof PLUGINS)[number]['key'];
 
 /** The plugins that the runtime of each camera has, in menu order. */
 export const CAMERA_PLUGINS = {
-  gr3: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain'],
-  gr3x: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain'],
-  gr4: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain'],
+  gr3: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain', 'bloom', 'halation', 'blackFloor', 'splitToning', 'colourRange', 'colourSaturation', 'colourHue', 'colourBrightness', 'highlightRolloff', 'softShortcut'],
+  gr3x: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain', 'bloom', 'halation', 'blackFloor', 'splitToning', 'colourRange', 'colourSaturation', 'colourHue', 'colourBrightness', 'highlightRolloff', 'softShortcut'],
+  gr4: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain', 'bloom', 'halation', 'blackFloor', 'splitToning', 'colourRange', 'colourSaturation', 'colourHue', 'colourBrightness', 'highlightRolloff'],
 } as const satisfies Readonly<Record<string, readonly PluginKey[]>>;

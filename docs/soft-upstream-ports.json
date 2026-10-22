@@ -1,0 +1,21 @@
+{
+  "upstream": "https://github.com/ahonn/grkit",
+  "inspected_head": "2afc137e461d8c6a60ea0811edd2ac1e53116804",
+  "ports": {
+    "d50114c": "directory enumeration",
+    "67b151e": "script-disable package/API/CLI, custom UI",
+    "7ac87d9": "native list/frame/scroll and lifecycle, adapted for hierarchy",
+    "3f337e1": "ADJ press closes",
+    "a225a45": "root Fn and captured adjustment metadata",
+    "309581f": "DISP visibility",
+    "4b1bed9": "native guide lines",
+    "2afc137": "latest date renderer, adapted for Soft format/digits subpages and retained mono styles"
+  },
+  "excluded": [
+    "firmware relocation framework",
+    "GR IV firmware-build compatibility work",
+    "default upstream icon artwork",
+    "native Date Imprint borrowed MENU-submenu framework"
+  ],
+  "hardware_tested": false
+}

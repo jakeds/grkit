@@ -70,3 +70,10 @@ export function save(blob: Blob, filename: string): void {
   // Some browsers read the URL after the click returns.
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
+
+/** Upstream's firmware command only; contains no camera runtime. */
+export async function buildScriptsOffPackage(camera: string): Promise<Blob> {
+  const { default: init, scriptsOffPackage } = await import('./wasm/grkit_wasm.js');
+  await init();
+  return new Blob([scriptsOffPackage(camera) as Uint8Array<ArrayBuffer>], { type: 'application/zip' });
+}

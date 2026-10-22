@@ -28,7 +28,7 @@ macro_rules! fields {
     };
 }
 
-pub const HOST_HEADER_SIZE: usize = 256;
+pub const HOST_HEADER_SIZE: usize = 320;
 /// The placeholder for the header address in ARM code. The installer replaces
 /// each literal word with this value by the address of the `registry` array.
 pub const HEADER_REFERENCE: u32 = 0x58012340;
@@ -63,7 +63,7 @@ fields!(HEADER_FIELDS {
     HOST_MENU_SLOT = 44, 4;
     /// Guide style previewed on the ADJ canvas while GRKIT_HOST_FRAME_PREVIEW is set.
     HOST_GUIDE_PREVIEW = 48, 4;
-    /// Date stamp style: 0 Off, 1 'YY M D, 2 'YY M D H:MM, 3 M D 'YY, 4 D M 'YY.
+    /// Date stamp style: 0 Off, 1 'YY M D, 2 'YY M D H:MM, 3 M D 'YY, 4 D M 'YY, 5 small white mono, 6 small black mono.
     HOST_STAMP = 52, 4;
     /// Installed plugins: bit n is plugin n of grkit_core::plugins::PLUGINS and
     /// module n of the menu. A plugin that needs effects is set only with effects.
@@ -73,7 +73,7 @@ fields!(HEADER_FIELDS {
     HOST_MENU_REBUILDING = 60, 4;
     /// Native list position, saved when the private menu opens.
     HOST_MENU_LIST = 64, 8;
-    /// Grain level: 0 Off, 1 weak, 2 medium, 3 strong. The native grain stage of
+    /// Grain code: 0 Off, 1/2/3 native weak/medium/strong; 4..11 intermediate strengths on GR III/IIIx. The native grain stage of
     /// recorded pictures uses it instead of the native grain settings.
     HOST_GRAIN = 72, 4;
     /// Number of ADJ events. GRKIT_HOST_MENU_EVENT_RING holds the last ones.
@@ -102,8 +102,16 @@ fields!(HEADER_FIELDS {
     HOST_PARAMETER_CHANGES = 148, 4;
     /// GRKIT_HOST_PARAMETER_CHANGES at the last live-view build.
     HOST_LIVE_PARAMETER_CHANGES = 152, 4;
-    /// Reserved and zero.
-    HOST_RESERVED = 156, 20;
+    /// Atomic sequence of custom-grain operations since startup (GR III/IIIx).
+    HOST_GRAIN_SEQUENCE = 156, 4;
+    /// Last custom grain seed, for diagnostics; not persisted in image metadata.
+    HOST_GRAIN_SEED = 160, 4;
+    /// Experimental JPEG bloom strength: 0 Off, 1..3.
+    HOST_BLOOM = 164, 4;
+    /// Experimental JPEG halation strength: 0 Off, 1..3.
+    HOST_HALATION = 168, 4;
+    /// Film date digits: 0 Classic, 1 GR1s dot matrix, 2 GR II.
+    HOST_STAMP_LOOK = 172, 4;
     /// Icon of the GRKit tile.
     HOST_PLUGINS_ICON = 176, 4;
     /// Private toolbar cell, or 0.
@@ -149,9 +157,40 @@ fields!(HEADER_FIELDS {
     /// Return to GRKit Image Control after the native parameter page: 1 opening,
     /// 2 away.
     HOST_RETURN = 252, 4;
+    /// Neutral shadow floor: 0 Off, 1..3.
+    HOST_BLACK_FLOOR = 256, 4;
+    /// Split-tone preset: 0 Off, 1..6.
+    HOST_SPLIT_TONE = 260, 4;
+    /// Colour range being edited: 0 disables the adjustments, 1..7 select a range.
+    HOST_COLOUR_RANGE = 264, 4;
+    /// Seven three-bit saturation codes. Each range retains its own setting.
+    HOST_COLOUR_SATURATION = 268, 4;
+    /// Seven three-bit hue codes. Each range retains its own setting.
+    HOST_COLOUR_HUE = 272, 4;
+    /// Seven three-bit brightness codes; zero is neutral.
+    HOST_COLOUR_BRIGHTNESS = 276, 4;
+    /// JPEG highlight shoulder: zero Off, 1..3 strength.
+    HOST_HIGHLIGHT_ROLLOFF = 280, 4;
+    /// Transient colour submenu: zero ranges, one parameters; never persisted.
+    HOST_COLOUR_MENU = 284, 4;
+    /// Soft shortcut selection: zero Off, one Fn in still live view.
+    HOST_SHORTCUT = 288, 4;
+    /// Transient held/pending flags; never persisted.
+    HOST_SHORTCUT_STATE = 292, 4;
+    /// Number of shortcut requests in this power session.
+    HOST_SHORTCUT_REQUESTS = 296, 4;
+    /// Current menu category: zero root, 1 Framing, 2 Tone, 3 Texture.
+    HOST_MENU_SECTION = 300, 4;
+    /// Additional saturation ranges for versioned five-bit controls.
+    HOST_SATURATION_UPPER = 304, 4;
+    /// Split-tone strength: zero legacy, 1..21 means Off..100%.
+    HOST_SPLIT_STRENGTH = 308, 4;
+    /// Keep the following native processing records aligned to 16 bytes.
+    HOST_CONTROL_RESERVED = 312, 8;
 });
 
 pub const RECORD_SIZE: usize = 0x740;
+const _: () = assert!(HOST_HEADER_SIZE.is_multiple_of(16) && RECORD_SIZE.is_multiple_of(16));
 
 fields!(RECORD_FIELDS {
     /// The native processing record: a prefix, then the tone curves.
@@ -197,7 +236,7 @@ pub const TAIL_SIZE: usize = PICTURE_SCRATCH + menu_text::TEXT_SIZE;
 const _: () = assert!(
     menu_text::TEXT_SUMMARY
         + runtime::MAX_COUNT * crate::packaging::Language::ALL.len() * menu_text::SUMMARY_UNITS * 2
-        <= menu_text::TEXT_PARAMETER_TITLE
+        <= menu_text::TEXT_MENU_PATH
 );
 
 /// Wraps `text` into a C comment.
@@ -354,6 +393,12 @@ pub fn header() -> String {
         out,
         "#define GRKIT_TEXT_LANGUAGES {}",
         crate::packaging::Language::ALL.len()
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "#define GRKIT_TEXT_MENU_PATH {}",
+        menu_text::TEXT_MENU_PATH
     )
     .unwrap();
     writeln!(out, "#define GRKIT_TEXT_RECORDS {}", runtime::MAX_COUNT).unwrap();

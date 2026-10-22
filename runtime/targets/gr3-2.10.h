@@ -36,8 +36,13 @@
 #define FW_LIST_ROW 0x53394758
 #define FW_LIST_SAVE 0x533947f0
 #define FW_LIST_CURSOR 0x53394820
+#define FW_LIST_WIDTH 0x533948c4
 #define FW_LIST_RESTORE 0x53395224
 #define FW_LIST_SET_CURSOR 0x53395430
+#define FW_LIST_MOVE 0x53395260
+/* The list\'s row vector (first and end pointers) and its shown row count. */
+#define LIST_ROWS 0xf4
+#define LIST_COUNT 0x108
 #define FW_ROW_SET_ICON 0x533a1734
 #define FW_ROW_SET_CHECK 0x533a19b4
 
@@ -49,6 +54,9 @@
 /* The slot type of the native Image Control slot, and the controller of its
    Standard parameter page (still mode). */
 #define ADJ_IC_SLOT_TYPE 12
+/* Soft .10 prototype: borrow the first assigned Image Control ADJ slot. */
+#define SOFT_NATIVE_ADJ_SLOT 1
+#define FRAMING_RATIO_COUNT 7U
 #define IC_PARAMETERS_CONTROLLER 0x2000014
 /* ImageControlDetailController, the parameter page. Its start method sets the
    type (+0x198), the set kind (+0x199: 0 the base set, 1 and 2 Custom), and
@@ -68,6 +76,8 @@
 #define FW_ADJ_REFRESH 0x531a4114
 #define FW_ADJ_SELECT_SLOT 0x531a4864
 #define FW_CHANGE_CONTROLLER 0x5316c9d8
+/* Native Open ADJ action: queues ADJ with the current return controller. */
+#define FW_SOFT_OPEN_ADJ 0x532264ec
 /* AdjModeController fields. */
 #define ADJ_CANVAS 0x4
 /* The UI language: a byte of the settings object that this slot points to
@@ -97,6 +107,8 @@
 #define EV_SWITCH 5
 #define EV_SWITCH_END 8
 #define EV_FN 0x1b
+/* An ADJ press, before the confirm that OK also sends. */
+#define EV_ADJ_PRESS 0x1e
 /* The argument of an Fn press. ADJ opens the native parameters on it. */
 #define FN_PRESS_ARG 2
 #define EV_TOUCH 0x30
@@ -127,8 +139,13 @@
 #define FW_YCBCR_CALC 0x536e4720
 /* DigitalFilterProcess plan: the grain stage flag that the stage gate sets. */
 #define GRAIN_GATE_FLAG 0x24
+#define FW_GRAIN_AMPLITUDE_RESUME 0x5367ae40
+#define FW_GRAIN_NOISE_RETURN 0x5367ae18
 #define FW_CACHE_FLUSH 0x5383c8a8
 #define FW_CLOCK 0x536bd838
 #define FW_LOCAL_TIME 0x536b6510
 
 #endif
+
+#define UI_SETTINGS_SLOT LANGUAGE_SETTINGS_SLOT
+#define DISPLAY_MODE_SETTING 0x912

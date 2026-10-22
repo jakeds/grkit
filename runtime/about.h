@@ -5,7 +5,7 @@
    gives the GRKit version. It has no rows, so OK on it opens no page. */
 #include "plugin.h"
 
-static const u16 *about_text(volatile u32 *h) { return text(h,TEXT_VERSION); }
+static const u16 *about_text(volatile u32 *h) { (void)h;static const u16 empty[]={'N','o',' ','c','o','n','t','r','o','l','s',0};return empty; }
 static const u16 *about_label(volatile u32 *h,u32 row) { (void)row; return about_text(h); }
 static u32 about_none(volatile u32 *h) { (void)h; return 0; }
 static u32 about_icon(volatile u32 *h,u32 row) { (void)h; (void)row; return GRKIT_ICON_GRKIT; }

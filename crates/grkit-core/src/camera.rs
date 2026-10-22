@@ -59,9 +59,19 @@ pub const GR3X: Camera = Camera {
     firmware: "1.60",
     target: "gr3-2.10",
     modeset: "00078490.609",
-    experimental: false,
+    experimental: true,
     effects: true,
     plugins: &modules::NAMES,
+};
+
+const GR4_PLUGINS: [&str; 14] = {
+    let mut names = [""; 14];
+    let mut i = 0;
+    while i < 14 {
+        names[i] = modules::NAMES[i];
+        i += 1;
+    }
+    names
 };
 
 pub const GR4: Camera = Camera {
@@ -73,7 +83,7 @@ pub const GR4: Camera = Camera {
     modeset: "00078560.636",
     experimental: true,
     effects: true,
-    plugins: &modules::NAMES,
+    plugins: &GR4_PLUGINS,
 };
 
 pub const CAMERAS: [&Camera; 3] = [&GR3, &GR3X, &GR4];

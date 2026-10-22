@@ -91,6 +91,37 @@ xpan_active:
     bx lr
 /* GetResolution id 2 heights replace `mov r3, #height` before a store and an
    unconditional branch to the epilogue, so r12 and the flags are dead. */
+#ifdef GRKIT_TARGET_GR3_210
+.macro HEIGHT name, stock, index
+.global \name
+\name:
+    push {r0-r2,r4,r12,lr}
+    mov r0, #\index
+    bl framing_geometry
+    movw r3, #\stock
+    cmp r0, #0
+    uxthne r2, r0
+    strne r2, [sp,#8]
+    lsrne r3, r0, #16
+    pop {r0-r2,r4,r12,pc}
+.endm
+HEIGHT framing_height_0, 3376, 0
+HEIGHT framing_height_1, 2704, 1
+HEIGHT framing_height_2, 1888, 2
+HEIGHT framing_height_3, 1080, 3
+.macro INSET name, thumbnail
+.global \name
+\name:
+    push {r2-r4,lr}
+    mov r0, #\thumbnail
+    bl framing_insets
+    lsr r1, r0, #16
+    uxth r0, r0
+    pop {r2-r4,pc}
+.endm
+INSET framing_screennail_inset, 0
+INSET framing_thumbnail_inset, 1
+#else
 .macro HEIGHT name, stock, xpan
 .global \name
 \name:
@@ -120,9 +151,16 @@ HEIGHT framing_height_3, XPAN_HEIGHT_3
 .endm
 INSET framing_screennail_inset, 38, 107
 INSET framing_thumbnail_inset, 16, 30
+#endif
 /* r0 = width, r1 = height. r12 = 65:24 size class 0..3, or -1.
    Clobbers r0-r3, r12 and the flags. */
 xpan_size:
+#ifdef GRKIT_TARGET_GR3_210
+    push {r0-r5,lr}
+    bl framing_classify_size
+    mov r12, r0
+    pop {r0-r5,pc}
+#else
     cmp r0, r1
     movhs r2, r0
     movhs r3, r1
@@ -144,6 +182,7 @@ xpan_size:
 4:  mov r12, r4
     pop {r4}
     bx lr
+#endif
 xpan_sizes:
     .hword XPAN_SIZES, 0, 0
 /* Replaces the aspect BL in the size classifier (GR III 0x532b3988: frame
@@ -158,7 +197,13 @@ framing_classify:
     ldr r2, =GRKIT_HEADER_REFERENCE
     cmp r12, #0
     blt 5f
+#ifdef GRKIT_TARGET_GR3_210
+    lsr r3, r12, #8
+    add r3, r3, #1
+    and r12, r12, #255
+#else
     mov r3, #2
+#endif
     strb r3, [r2, #GRKIT_HOST_FRAME_FILE]
     cmp CLASSIFY_CLASS, #0
     strbne r12, [CLASSIFY_CLASS]

@@ -549,6 +549,17 @@ td input[type='checkbox'] {
   min-width: 0;
 }
 
+.module-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.module-icon {
+  display: block;
+  flex: none;
+}
+
 .module-name {
   font-weight: 600;
   font-size: 16px;
@@ -651,3 +662,115 @@ code {
   flex-wrap: wrap;
   gap: 20px;
 }
+
+/* The Soft builder follows the same order as packing a camera kit. */
+.page { max-width: 1200px; }
+.languages { padding-bottom: 10px; }
+.masthead { gap: 12px; padding-bottom: 28px; }
+.masthead h1 { font-size: clamp(64px, 7vw, 92px); }
+.masthead .lead { font-size: clamp(26px, 3vw, 36px); }
+.camera-summary { margin: 0; font-size: 14px; font-weight: 600; }
+.camera-summary span { margin-left: 12px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.build-notes { font-size: 12px; line-height: 1.6; max-width: 78ch; }
+.build-notes summary { cursor: pointer; color: var(--warning); }
+.build-notes p { padding: 12px 0; }
+.section { gap: 28px; }
+.section > h2 { flex-basis: 155px; font-size: 24px; }
+.section-number { display: block; margin-bottom: 8px; font: 12px var(--mono); color: var(--muted); }
+.preview-row { flex-wrap: nowrap; }
+.viewer { flex: 1 1 520px; }
+.preview-side { flex-basis: 210px; }
+.previewing { font-size: 24px; }
+.look-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; border-top: 1px solid var(--line); }
+.look-choice { display: flex; align-items: flex-start; gap: 12px; border-bottom: 1px solid var(--line); padding: 20px 0; }
+.look-choice input { flex: none; width: 18px; height: 18px; margin: 10px 0 0; accent-color: var(--accent); cursor: pointer; }
+.look-choice .effect-icon { width: 36px; height: 36px; flex: none; }
+.look-copy { flex: 1; min-width: 0; }
+.look-copy p { margin: 5px 0 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.look-choice:not(.included) .effect-icon { opacity: .45; }
+.look-choice .button { padding: 0 8px; min-height: 34px; font-size: 12px; }
+.modules { display: block; }
+.control-group { min-width: 0; padding: 0; margin: 0 0 24px; border: 0; }
+.control-group:last-child { margin-bottom: 0; }
+.control-group legend { padding: 0 0 6px; font-size: 16px; font-weight: 600; }
+.control-options { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+.module-description { font-size: 13px; line-height: 1.5; }
+.module-name { font-size: 14px; }
+.module-icon { width: 28px; height: 28px; }
+.module input { width: 18px; height: 18px; margin-top: 5px; }
+.package dl { grid-template-columns: 90px minmax(0, 1fr); font-size: 14px; }
+.package { gap: 24px; }
+.package-action { flex-basis: 270px; }
+.download { font-size: 19px; min-height: 56px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 760px) {
+  .section > h2 { flex-basis: 100%; }
+  .section-number { display: inline; margin-right: 12px; }
+  .section { gap: 18px; padding: 24px 0 32px; }
+  .preview-row { flex-wrap: wrap; }
+  .preview-side { flex: 1 1 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .preview-side .note { grid-column: 1 / -1; }
+  .look-list { grid-template-columns: 1fr; }
+  .control-options { grid-template-columns: 1fr; }
+  .camera-summary span { display: block; margin: 5px 0 0; }
+  .package-action { flex: 1 1 100%; }
+  .masthead { padding-top: 8px; }
+}
+.other-looks-heading { grid-column: 1 / -1; padding: 24px 0 12px; }
+.other-looks-heading h3 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+.other-looks-heading p { margin: 0; font-size: 13px; color: var(--muted); }
+@media (max-width: 420px) { .toolbar > div { flex-wrap: wrap; } }
+
+/* A short, three-step builder within the existing Soft type system. */
+html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+.brand-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.header-download { display: inline-flex; align-items: center; text-decoration: none; }
+.masthead { padding: 20px 0 0; gap: 18px; }
+.masthead h1 { font-size: clamp(72px, 9vw, 112px); }
+.masthead .lead { font-size: clamp(26px, 3vw, 36px); font-weight: 500; }
+.builder-nav { display: flex; gap: 32px; padding: 24px 0 18px; font: 13px var(--mono); }
+.builder-nav a { text-decoration: none; }
+.section { padding: 28px 0 44px; }
+.section > h2 { flex-basis: 140px; }
+.section-body { gap: 20px; }
+.preview-row { gap: 24px; }
+.preview-side { justify-content: flex-start; gap: 16px; }
+.look-choice { padding: 15px 0; }
+.look-copy p { max-width: 32ch; }
+.look-copy .effect-stock { display: none; }
+.more-looks { border-top: 1px solid var(--line); }
+.more-looks summary { cursor: pointer; padding: 18px 0; font-weight: 600; }
+.more-looks summary span { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 12px; }
+.modules { display: grid; grid-template-columns: 1fr 1fr; gap: 28px 36px; }
+.control-group { margin: 0; }
+.control-group legend { font: 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; padding-bottom: 12px; color: var(--muted); }
+.control-options { grid-template-columns: 1fr; }
+.module { padding: 12px 0; gap: 12px; }
+.module-heading { gap: 8px; }
+.module-description { margin-left: 36px; font-size: 12px; }
+.module-name { font-size: 16px; font-weight: 500; }
+.package-caution { margin: 0 0 16px; max-width: 42ch; font-size: 13px; line-height: 1.5; color: var(--warning); }
+.package dl { align-content: start; }
+.package-action { flex-basis: 360px; }
+.package-action .download { width: 100%; }
+.help-panel { border-bottom: 1px solid var(--line); padding-bottom: 16px; font-size: 14px; line-height: 1.6; }
+.help-panel summary { cursor: pointer; font-size: 16px; font-weight: 500; }
+.help-panel p { margin: 16px 0 0; max-width: 65ch; }
+.help-panel .steps { margin-top: 16px; font-size: 14px; }
+.help-panel .button { margin-top: 16px; }
+.support-section { border-top: 1px solid var(--line); }
+@media (max-width: 760px) {
+  .section > h2 { flex-basis: 100%; }
+  .section { gap: 20px; }
+  .modules { gap: 24px; }
+  .preview-side { display: flex; flex-direction: column; gap: 12px; }
+  .preview-side .field { margin: 0; }
+  .builder-nav { gap: 22px; font-size: 12px; }
+  .masthead { padding-top: 12px; }
+}
+@media (max-width: 520px) {
+  .modules { grid-template-columns: 1fr; }
+  .more-looks summary span { display: block; margin: 6px 0 0 18px; }
+  .header-download { padding: 0 12px; font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

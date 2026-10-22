@@ -130,14 +130,20 @@ pub fn verify_firmware(path: &Path, target: &'static Target) -> Result<FirmwareI
     let data = std::fs::read(path).with_context(|| format!("Read firmware {}", path.display()))?;
     let identity = sha256(&data);
     ensure!(
-        identity == target.firmware_sha256,
+        identity == target.firmware_sha256
+            || (target.name == "gr3-2.10"
+                && identity == "708e79f3b7b96a7e1581b4acf4c412233050a1832718ef7f06c8397db1b431c7"),
         "Firmware SHA-256 does not match {}",
         target.firmware
     );
     let decoded = decode(&data)?;
     let decoded_identity = sha256(&decoded);
     ensure!(
-        decoded_identity == target.decoded_sha256,
+        decoded_identity == target.decoded_sha256
+            || (target.name == "gr3-2.10"
+                && identity == "708e79f3b7b96a7e1581b4acf4c412233050a1832718ef7f06c8397db1b431c7"
+                && decoded_identity
+                    == "c4bfc09d1148deec2155b21bd3d63be8085cf835cbe5e5cde4832747f519e630"),
         "Decoded firmware SHA-256 mismatch"
     );
     let mut pos = 0;

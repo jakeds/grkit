@@ -42,9 +42,13 @@ static unsigned flushes, native_aspect;
 #define PICTURE_SCRATCH(h) ((void)(h), SCRATCH)
 #define PICTURE_MAP(address) ((u8 *)region((address), GRKIT_PICTURE_SCRATCH))
 #define PICTURE_BARRIER() ((void)0)
+/* Maker-note element writes: the entry, then the value of each element. */
+static uint32_t ifd_entry, ifd_writes, ifd_values[32];
+#define PICTURE_IFD_SET_SHORT(entry,index,value) do { assert((index) < 32 && !((value) >> 16)); \
+    ifd_entry = (entry); ifd_values[(index)] = (value); ++ifd_writes; } while (0)
 #include "picture.c"
 
-static volatile u32 header[64];
+static volatile u32 header[GRKIT_HOST_HEADER_SIZE/4];
 volatile u32 *framing_header(void) { return header; }
 
 #define RECORDS (ARENA + 0x100)
@@ -164,8 +168,193 @@ static struct box changes(uint32_t index, int mono)
     return b;
 }
 
+/* Impulse highlights exercise the diffusion kernel, tint, disabled path,
+   odd dimensions, padded rows and both chroma layouts. */
+static void test_diffusion(void) {
+    for(u32 half=0;half<2;++half) for(u32 warm=0;warm<2;++warm) {
+        reset();
+        PictureSet set={0};
+        Plane p={PLANES,PLANES+80*64,64,64,80,half,0,0,64,64};
+        set.scratch=PICTURE_MAP(SCRATCH); set.count=1; set.planes[0]=p;
+        memset(PICTURE_MAP(p.y),40,80*64);
+        memset(PICTURE_MAP(p.c),128,80*64);
+        for(u32 y=24;y<40;++y) for(u32 x=24;x<40;++x) BYTE(p.y,y*80+x)=250;
+        u32 previous=40;
+        for(u32 row=0;row<21;++row) {
+            memset(PICTURE_MAP(p.y),40,80*64);memset(PICTURE_MAP(p.c),128,80*64);
+            for(u32 yy=24;yy<40;++yy) for(u32 xx=24;xx<40;++xx) BYTE(p.y,yy*80+xx)=250;
+            diffusion_apply(&set,strength_code(row),warm);
+            u32 sample=BYTE(p.y,32*80+23);assert(sample>=previous);previous=sample;
+        }
+        memset(PICTURE_MAP(p.y),40,80*64);memset(PICTURE_MAP(p.c),128,80*64);
+        for(u32 yy=24;yy<40;++yy) for(u32 xx=24;xx<40;++xx) BYTE(p.y,yy*80+xx)=250;
+        diffusion_apply(&set,0,warm);
+        assert(BYTE(p.y,32*80+23)==40);
+        diffusion_apply(&set,3,warm);
+        assert(BYTE(p.y,32*80+23)>40);
+        assert(BYTE(p.y,4*80+4)==40);
+        for(u32 y=0;y<64;++y) for(u32 x=64;x<80;++x) assert(BYTE(p.y,y*80+x)==40);
+        u32 cr=BYTE(p.c,(half ? 16U : 32U)*80+23);
+        assert(warm ? cr>128 : cr==128);
+        /* Monochrome records retain neutral chroma. */
+        set.mono=1;
+        memset(PICTURE_MAP(p.c),128,80*64);
+        diffusion_apply(&set,3,warm);
+        for(u32 y=0;y<(half ? 32U : 64U);++y)
+            for(u32 x=0;x<64;++x) assert(BYTE(p.c,y*80+x)==128);
+        /* Partial grid cells, insets and dark pictures change no pixels. */
+        p.left=2; p.top=2; p.right=62; p.bottom=61; set.planes[0]=p;
+        memset(PICTURE_MAP(p.y),40,80*64);
+        diffusion_apply(&set,3,warm);
+        for(u32 y=0;y<64;++y) for(u32 x=0;x<80;++x) assert(BYTE(p.y,y*80+x)==40);
+    }
+    /* Half-resolution uniform maps stay uniform even at large coordinates. */
+    u8 map[16]; memset(map,173,sizeof(map));
+    for(u32 x=0;x<32;++x) assert(diffusion_sample(map,4,4,x,x,3)==173);
+}
+
+static void test_colour_controls(void) {
+    u8 *table=PICTURE_MAP(SCRATCH);
+    /* Shadow lift is monotonic, reaches the promised floor, and leaves all
+       values from 96 upwards untouched. Off is bit-exact. */
+    for(u32 level=0;level<4;++level) {
+        assert(black_floor_value(0,level)==4*level);
+        for(u32 y=1;y<256;++y) {
+            assert(black_floor_value(y,level)>=black_floor_value(y-1,level));
+            assert(black_floor_value(y,level)>=y);
+            if(y>=96 || !level) assert(black_floor_value(y,level)==y);
+        }
+    }
+    /* The shoulder is monotonic, identity below 176, and bounded at white. */
+    for(u32 level=0;level<4;++level) {
+        assert(highlight_rolloff_sample(255,level)==255-8*level);
+        for(u32 y=1;y<256;++y) {
+            assert(highlight_rolloff_sample(y,level)>=highlight_rolloff_sample(y-1,level));
+            assert(highlight_rolloff_sample(y,level)<=y);
+            if(y<=176 || !level) assert(highlight_rolloff_sample(y,level)==y);
+        }
+    }
+    /* Fine steps are monotonic, bounded, and retain legacy curve values. */
+    for(u32 row=0;row<21;++row) {
+        u32 code=strength_code(row);
+        assert(black_floor_value(0,code)==(12*row+10)/20);
+        assert(highlight_rolloff_sample(255,code)==255-(24*row+10)/20);
+        for(u32 y=1;y<256;++y) {
+            assert(black_floor_value(y,code)>=black_floor_value(y-1,code));
+            assert(highlight_rolloff_sample(y,code)>=highlight_rolloff_sample(y-1,code));
+            if(row) {
+                assert(black_floor_value(y,code)>=black_floor_value(y,strength_code(row-1)));
+                assert(highlight_rolloff_sample(y,code)<=highlight_rolloff_sample(y,strength_code(row-1)));
+            }
+        }
+    }
+    /* The new warm families shift both endpoints warmer, preserve middle
+       neutrals, and respond to the full 5% strength range. */
+    for(u32 preset=13;preset<=16;++preset) for(u32 step=1;step<=20;++step) {
+        reset();PictureSet set={0};Plane p={PLANES,PLANES+80*64,64,64,80,0,0,0,64,64};
+        set.scratch=PICTURE_MAP(SCRATCH);set.count=1;set.planes[0]=p;
+        header[GRKIT_HOST_SPLIT_TONE/4]=preset;header[GRKIT_HOST_SPLIT_STRENGTH/4]=step+1;
+        memset(PICTURE_MAP(p.y),0,80*64);memset(PICTURE_MAP(p.c),128,80*64);
+        split_toning_apply_picture(header,&set);
+        assert(BYTE(p.c,0)<=128 && BYTE(p.c,1)>=128);
+        memset(PICTURE_MAP(p.y),128,80*64);memset(PICTURE_MAP(p.c),128,80*64);
+        split_toning_apply_picture(header,&set);assert(BYTE(p.c,0)==128 && BYTE(p.c,1)==128);
+    }
+    /* No colour adjustment is exactly identity, including all extreme codes. */
+    colour_table(table,0,0);
+    for(u32 cb=0;cb<256;++cb) for(u32 cr=0;cr<256;++cr) {
+        u32 at=(cb*256+cr)*2;
+        assert(table[at]==cb && table[at+1]==cr);
+    }
+    colour_table(table,2,0); /* Reds at -50%. */
+    assert(table[(85*256+255)*2]>85 && table[(85*256+255)*2+1]<255);
+    assert(table[(43*256+21)*2]==43 && table[(43*256+21)*2+1]==21); /* Green stays green. */
+    assert(table[(128*256+128)*2]==128 && table[(128*256+128)*2+1]==128);
+    colour_table(table,2|(2U<<9),0); /* Red AND green settings remain active. */
+    assert(table[(85*256+255)*2]>85 && table[(43*256+21)*2]>43);
+    colour_table(table,0,3); /* A positive red hue shift changes direction. */
+    assert(table[(85*256+255)*2]!=85 || table[(85*256+255)*2+1]!=255);
+    for(u32 half=0;half<2;++half) {
+        reset();
+        PictureSet set={0};
+        Plane p={PLANES,PLANES+80*64,64,64,80,half,2,3,62,61};
+        set.count=1;set.planes[0]=p;set.scratch=PICTURE_MAP(SCRATCH);
+        memset(PICTURE_MAP(p.y),0,80*64);memset(PICTURE_MAP(p.c),128,80*64);
+        header[GRKIT_HOST_BLACK_FLOOR/4]=2;
+        black_floor_apply_picture(header,&set);
+        assert(BYTE(p.y,10*80+10)==8 && BYTE(p.y,2*80+10)==0 && BYTE(p.y,10*80+63)==0);
+        /* Split tone moves shadow and highlight chroma in opposite directions;
+           luma, neutral midtones, padding and partial chroma boundary rows stay intact. */
+        header[GRKIT_HOST_SPLIT_TONE/4]=1;
+        split_toning_apply_picture(header,&set);
+        assert(BYTE(p.c,(half ? 5U : 10U)*80+10)>128);
+        assert(BYTE(p.c,(half ? 5U : 10U)*80+11)<128);
+        assert(BYTE(p.y,10*80+10)==8);
+        assert(BYTE(p.c,80+10)==128 && BYTE(p.c,10*80+63)==128);
+        memset(PICTURE_MAP(p.y),255,80*64);memset(PICTURE_MAP(p.c),128,80*64);
+        split_toning_apply_picture(header,&set);
+        assert(BYTE(p.c,(half ? 5U : 10U)*80+10)<128);
+        assert(BYTE(p.c,(half ? 5U : 10U)*80+11)>128);
+        memset(PICTURE_MAP(p.y),128,80*64);memset(PICTURE_MAP(p.c),128,80*64);
+        split_toning_apply_picture(header,&set);
+        for(u32 i=0;i<80*64;++i) assert(BYTE(p.c,i)==128 && BYTE(p.y,i)==128);
+        /* Brightness uses original chroma, preserves padding, and bypasses
+           mono and Off. Red gains luma; neutral grey stays unchanged. */
+        memset(PICTURE_MAP(p.y),100,80*64);
+        memset(PICTURE_MAP(p.c),128,80*64);
+        for(u32 yy=0;yy<64;++yy) for(u32 xx=0;xx<64;xx+=2) {
+            BYTE(p.c,yy*80+xx)=85; BYTE(p.c,yy*80+xx+1)=255;
+        }
+        header[GRKIT_HOST_COLOUR_RANGE/4]=1;
+        header[GRKIT_HOST_COLOUR_BRIGHTNESS/4]=4;
+        colour_range_apply_picture(header,&set);
+        assert(BYTE(p.y,10*80+10)>=118 && BYTE(p.y,2*80+10)==100 && BYTE(p.y,10*80+63)==100);
+        assert(BYTE(p.c,10*80+10)==85 && BYTE(p.c,10*80+11)==255);
+        memset(PICTURE_MAP(p.y),100,80*64); set.mono=1;
+        colour_range_apply_picture(header,&set); assert(BYTE(p.y,10*80+10)==100); set.mono=0;
+        memset(PICTURE_MAP(p.c),128,80*64);
+        colour_range_apply_picture(header,&set); assert(BYTE(p.y,10*80+10)==100);
+        header[GRKIT_HOST_COLOUR_BRIGHTNESS/4]=0;
+        memset(PICTURE_MAP(p.y),255,80*64); header[GRKIT_HOST_HIGHLIGHT_ROLLOFF/4]=3;
+        highlight_rolloff_apply_picture(header,&set);
+        assert(BYTE(p.y,10*80+10)==231 && BYTE(p.y,2*80+10)==255 && BYTE(p.y,10*80+63)==255);
+        header[GRKIT_HOST_HIGHLIGHT_ROLLOFF/4]=0;
+        /* Remembered per-range settings do not overwrite each other. */
+        header[GRKIT_HOST_COLOUR_RANGE/4]=1;colour_write(header,GRKIT_HOST_COLOUR_SATURATION,2,5);
+        header[GRKIT_HOST_COLOUR_RANGE/4]=4;colour_write(header,GRKIT_HOST_COLOUR_SATURATION,3,5);
+        assert(colour_read(header,GRKIT_HOST_COLOUR_SATURATION,5)==3);
+        header[GRKIT_HOST_COLOUR_RANGE/4]=1;assert(colour_read(header,GRKIT_HOST_COLOUR_SATURATION,5)==2);
+        header[GRKIT_HOST_COLOUR_RANGE/4]=0;
+        colour_range_apply_picture(header,&set); /* Off bypasses all remembered edits. */
+        for(u32 i=0;i<80*64;++i) assert(BYTE(p.c,i)==128);
+    }
+}
+
 int main(void)
 {
+    test_diffusion();
+    test_colour_controls();
+#ifdef GRKIT_TARGET_GR3_210
+    reset();
+    static const u32 amplitudes[]={0,64,128,256,26,51,77,102,154,179,205,230};
+    for(u32 code=1;code<12;++code) {
+        header[GRKIT_HOST_GRAIN/4]=code;
+        assert(grain_amplitude_value(1)==amplitudes[code]);
+    }
+    for(u32 row=1;row<=20;++row) {header[GRKIT_HOST_GRAIN/4]=strength_code(row);assert(grain_amplitude_value(1)==(row*256+10)/20);}
+    header[GRKIT_HOST_GRAIN/4]=0;
+    assert(grain_amplitude_value(1)==256 && grain_amplitude_value(2)==128 && grain_amplitude_value(3)==64);
+    header[GRKIT_HOST_GRAIN/4]=999;
+    assert(grain_amplitude_value(2)==128);
+    header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
+    u32 seed1=grain_seed_value(100,200), seed2=grain_seed_value(100,200);
+    assert(seed1!=seed2 && header[GRKIT_HOST_GRAIN_SEQUENCE/4]==2);
+    assert(header[GRKIT_HOST_GRAIN_SEED/4]==seed2);
+    header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
+    assert(grain_seed_value(100,200)==seed1);
+    header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
+    assert(grain_seed_value(101,200)!=seed1);
+#endif
     static const short identity[9] = {8192, 0, 0, 0, 8192, 0, 0, 0, 8192};
     /* Native records and GRFX0001 records keep the native matrix bits. */
     reset();
@@ -258,6 +447,42 @@ int main(void)
     picture_encode(0, MESSAGE);
     assert(flushes == 0);
     for (u32 i = 0; i < 3; ++i) assert(changes(i, 0).lit == 0);
+    /* Small mono styles have a padded ISO-like date and neutral, non-glowing
+       strokes. Test both colours and preserve padded columns in each plane. */
+    for(u32 style=5;style<=6;++style) {
+        static const u8 dt[6]={2026&255,2026>>8,1,5,9,5};
+        char text[20]; u32 n=date_text(text,dt,style);
+        assert(n==10 && !memcmp(text,"2026.01.05",10));
+        encode_setup(); fill_planes(style==5 ? 40 : 220,128,128);
+        header[GRKIT_HOST_STAMP/4]=style;
+        picture_encode(0,MESSAGE);
+        assert(flushes==12);
+        for(u32 i=0;i<3;++i) {
+            struct box b=changes(i,0);
+            assert(b.lit && !b.orange);
+            assert(style==5 ? b.lighter : !b.lighter);
+            assert(b.left>planes[i].width/2 && b.top>planes[i].height/2);
+            assert(b.bottom-b.top<=planes[i].height/40+2);
+        }
+    }
+    assert(mono_dot(":",1,2,2) && mono_dot(":",1,2,5) && !mono_dot(":",1,2,3));
+    assert(mono_dot("'",1,2,0) && !mono_dot("'",1,2,3));
+    /* Every exposed format can use either mono appearance independently. */
+    for(u32 style=1;style<=8;++style) if(style!=5 && style!=6) for(u32 look=3;look<=4;++look) {
+        encode_setup();fill_planes(look==3 ? 40 : 220,128,128);
+        header[GRKIT_HOST_STAMP/4]=style;header[GRKIT_HOST_STAMP_LOOK/4]=look;
+        picture_encode(0,MESSAGE);
+        for(u32 i=0;i<3;++i) {
+            struct box b=changes(i,0);assert(b.lit && !b.orange);
+            assert(look==3 ? b.lighter : !b.lighter);
+        }
+    }
+    /* The padded format also paints its separators with every film renderer. */
+    for(u32 look=0;look<3;++look) {
+        encode_setup();fill_planes(40,128,128);
+        header[GRKIT_HOST_STAMP/4]=8;header[GRKIT_HOST_STAMP_LOOK/4]=look;
+        picture_encode(0,MESSAGE);assert(changes(0,0).lit);
+    }
     /* On a dark neutral picture the stamp lights an orange core at the bottom
        right of the visible area, once per plane set, and only lightens. */
     for (u32 style = 1; style <= 4; ++style) {
@@ -346,6 +571,16 @@ int main(void)
     WORD(record(2), GRKIT_RECORD_MONOCHROME) = 1;
     picture_encode(0, MESSAGE);
     for (u32 i = 0; i < 3; ++i) { struct box b = changes(i, 1); assert(b.lit && b.lighter && !b.orange); }
+    /* Every imported digit renderer stays bounded and neutral in monochrome,
+       including the new day-first date/time format and preview planes. */
+    for(u32 look=0;look<3;++look) for(u32 style=1;style<=7;++style) {
+        encode_setup();fill_planes(40,128,128);
+        header[GRKIT_HOST_STAMP/4]=style;header[GRKIT_HOST_STAMP_LOOK/4]=look;
+        still(record(2));WORD(record(2),GRKIT_RECORD_MONOCHROME)=1;
+        picture_encode(0,MESSAGE);
+        for(u32 plane=0;plane<3;++plane) {struct box b=changes(plane,1);assert(b.lit && (style==6 ? !b.lighter : b.lighter) && !b.orange);}
+    }
+    {static const u8 dt[6]={2026&255,2026>>8,10,17,9,5};char text[20];u32 n=date_text(text,dt,7);const char *expected="17 10 '26  9:05";assert(n==strlen(expected) && !memcmp(text,expected,n));}
     /* Unusable descriptors are skipped. */
     encode_setup();
     header[GRKIT_HOST_STAMP / 4] = 1;
@@ -473,6 +708,31 @@ int main(void)
     picture_encode(0, MESSAGE);
     assert(flushes == 0);
     for (u32 i = 0; i < 3; ++i) assert(changes(i, 0).lit == 0);
+    /* The maker note of a GRKit shot records the Fn adjustments of its record
+       in the nine Standard elements of tag 0x247, as shown values. Stored
+       bytes are the shown value mod 9, and a byte above 8 counts as 0. */
+    {
+        static const uint8_t stored[9] = {2, 7, 0, 4, 5, 8, 1, 9, 6};
+        static const uint32_t elements[9] = {0, 1, 2, 3, 4, 5, 6, 9, 10};
+        static const uint32_t shown[9] = {2, 0xfffe, 0, 4, 0xfffc, 0xffff, 1, 0, 0xfffd};
+        reset();
+        for (u32 i = 0; i < 9; ++i) BYTE(record(2), GRKIT_RECORD_PARAMETERS + i) = stored[i];
+        memset(ifd_values, 0xaa, sizeof(ifd_values));
+        ifd_writes = 0;
+        picture_record_parameters(0x1234, SHOT);
+        assert(ifd_writes == 0);
+        still(record(2));
+        picture_record_parameters(0x1234, SHOT);
+        assert(ifd_writes == 9 && ifd_entry == 0x1234);
+        for (u32 i = 0; i < 9; ++i) assert(ifd_values[elements[i]] == shown[i]);
+        /* The other elements keep the native fill. */
+        for (u32 i = 0; i < 32; ++i)
+            if (i > 10 || i == 7 || i == 8) assert(ifd_values[i] == 0xaaaaaaaaU);
+        /* Another shot keeps the native adjustments. */
+        ifd_writes = 0;
+        picture_record_parameters(0x1234, SHOT + 4);
+        assert(ifd_writes == 0);
+    }
     /* Division helper used for reciprocals. */
     for (u32 n = 0; n < 70000; n += 37) for (u32 d = 1; d < 400; d += 13) assert(divide(n, d) == n / d);
     return 0;

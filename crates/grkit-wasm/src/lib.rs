@@ -105,7 +105,14 @@ impl Builder {
     /// Selects the camera: `gr3` (the default), `gr3x`, or `gr4`. The package gets its
     /// ModeSet file. `build` rejects a camera that does not run this runtime.
     pub fn set_camera(&mut self, id: &str) -> Result<()> {
-        self.camera = camera::find(id)?;
+        let camera = camera::find(id)?;
+        self.plugins = Selection::from_names(
+            self.plugins
+                .names()
+                .into_iter()
+                .filter(|name| camera.plugins.contains(name)),
+        )?;
+        self.camera = camera;
         Ok(())
     }
 
@@ -203,6 +210,14 @@ impl Package {
     pub fn build(&self) -> Result<Vec<u8>, JsError> {
         self.0.build().map_err(js_error)
     }
+}
+
+/// Returns the ZIP that turns SD scripts off on a camera: `gr3`, `gr3x`, or `gr4`.
+#[wasm_bindgen(js_name = scriptsOffPackage)]
+pub fn scripts_off_package(camera: &str) -> Result<Vec<u8>, JsError> {
+    grkit_core::camera::find(camera)
+        .and_then(grkit_core::packaging::assemble_scripts_off)
+        .map_err(js_error)
 }
 
 fn js_error(error: anyhow::Error) -> JsError {

@@ -82,7 +82,11 @@ grain_level:
     ldr r3, =GRKIT_HEADER_REFERENCE
     ldr r3, [r3, #GRKIT_HOST_GRAIN]
     sub r3, r3, #1
+#ifdef GRKIT_TARGET_GR3_210
+    cmp r3, #51
+#else
     cmp r3, #2
+#endif
     bx lr
 
 // Replaces the BL to the stage gate. r0 = plan, r1 = shot settings. The caller
@@ -158,7 +162,7 @@ grain_particle:
     push {lr}
     bl grain_level
     pop {lr}
-    rsbls r3, r3, #3
+    movls r3, #1
     ldrbhi r3, [r5, #0x795]
     bx lr
 #endif
@@ -182,6 +186,21 @@ picture_capture_tone:
     ldrh r2, [r12, #(GRKIT_RECORD_CODE & 0xff)]
     ldr pc, =FW_IFD_SET_SHORT
 
+/* Capture: the maker-note adjustments (tag 0x247) of a GRKit shot. Replaces
+   the BL to the native fill: r0 = the setter + 8, r1 is the IFD entry, and r2
+   the shot settings. The native fill runs first, and its result returns. */
+.global picture_capture_parameters
+picture_capture_parameters:
+    push {r1, r2, r4, lr}
+    ldr r12, =HOOK_PICTURE_CAPTURE_PARAMETERS_TARGET
+    blx r12
+    mov r4, r0
+    ldr r0, [sp]
+    ldr r1, [sp, #4]
+    bl picture_record_parameters
+    mov r0, r4
+    pop {r1, r2, r4, pc}
+
 // JpegEncodeMacroProcess::Execute entry: r0 = process, r1 = message. The stub
 // keeps every argument and replays the displaced `mov ip, sp`.
 .global picture_encode_entry
@@ -192,3 +211,33 @@ picture_encode_entry:
     mov r12, sp
     ldr pc, =HOOK_PICTURE_ENCODE_ENTRY_RESUME
 .ltorg
+
+#ifdef HOOK_GRAIN_AMPLITUDE
+/* Replace the first native amplitude selector and resume after all selectors.
+   r5 is the native Particle value. The core returns native amplitude when Off. */
+.global grain_amplitude
+grain_amplitude:
+    push {r0-r3,r12,lr}
+    mov r0,r5
+    bl grain_amplitude_value
+    mov r6,r0
+    pop {r0-r3,r12,lr}
+    ldr pc,=FW_GRAIN_AMPLITUDE_RESUME
+#endif
+#ifdef HOOK_GRAIN_SEED
+/* Native noise generator's original `ldr r0,[fp,#-0x4c]`. Only override
+   calls from Granulation, whose return address is saved at [fp,-4]. */
+.global grain_seed
+grain_seed:
+    ldr r0,[fp,#-0x4c]
+    push {r1-r4,r12,lr}
+    ldr r1,[fp,#-4]
+    ldr r2,=FW_GRAIN_NOISE_RETURN
+    cmp r1,r2
+    bne 1f
+    bl grain_level
+    bhi 1f
+    ldr r1,[fp,#-0x48]
+    bl grain_seed_value
+1:  pop {r1-r4,r12,pc}
+#endif

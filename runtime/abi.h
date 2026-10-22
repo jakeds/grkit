@@ -7,7 +7,7 @@
 /* The private header: the start of the registry array. ARM code addresses it
    through the literal GRKIT_HEADER_REFERENCE, which the installer relocates. */
 #define GRKIT_HEADER_REFERENCE 0x58012340
-#define GRKIT_HOST_HEADER_SIZE 256
+#define GRKIT_HOST_HEADER_SIZE 320
 #define GRKIT_HOST_MAGIC_VALUE 0x314d5247
 #define GRKIT_HOST_VERSION_VALUE 1
 /* Number of Image Control records. */
@@ -37,7 +37,8 @@
 /* Guide style previewed on the ADJ canvas while GRKIT_HOST_FRAME_PREVIEW is
    set. */
 #define GRKIT_HOST_GUIDE_PREVIEW 48
-/* Date stamp style: 0 Off, 1 'YY M D, 2 'YY M D H:MM, 3 M D 'YY, 4 D M 'YY. */
+/* Date stamp style: 0 Off, 1 'YY M D, 2 'YY M D H:MM, 3 M D 'YY, 4 D M 'YY, 5
+   small white mono, 6 small black mono. */
 #define GRKIT_HOST_STAMP 52
 /* Installed plugins: bit n is plugin n of grkit_core::plugins::PLUGINS and
    module n of the menu. A plugin that needs effects is set only with effects. */
@@ -48,8 +49,9 @@
 /* Native list position, saved when the private menu opens. */
 #define GRKIT_HOST_MENU_LIST 64
 #define GRKIT_HOST_MENU_LIST_WORDS 2
-/* Grain level: 0 Off, 1 weak, 2 medium, 3 strong. The native grain stage of
-   recorded pictures uses it instead of the native grain settings. */
+/* Grain code: 0 Off, 1/2/3 native weak/medium/strong; 4..11 intermediate
+   strengths on GR III/IIIx. The native grain stage of recorded pictures uses
+   it instead of the native grain settings. */
 #define GRKIT_HOST_GRAIN 72
 /* Number of ADJ events. GRKIT_HOST_MENU_EVENT_RING holds the last ones. */
 #define GRKIT_HOST_MENU_EVENTS 76
@@ -80,9 +82,16 @@
 #define GRKIT_HOST_PARAMETER_CHANGES 148
 /* GRKIT_HOST_PARAMETER_CHANGES at the last live-view build. */
 #define GRKIT_HOST_LIVE_PARAMETER_CHANGES 152
-/* Reserved and zero. */
-#define GRKIT_HOST_RESERVED 156
-#define GRKIT_HOST_RESERVED_WORDS 5
+/* Atomic sequence of custom-grain operations since startup (GR III/IIIx). */
+#define GRKIT_HOST_GRAIN_SEQUENCE 156
+/* Last custom grain seed, for diagnostics; not persisted in image metadata. */
+#define GRKIT_HOST_GRAIN_SEED 160
+/* Experimental JPEG bloom strength: 0 Off, 1..3. */
+#define GRKIT_HOST_BLOOM 164
+/* Experimental JPEG halation strength: 0 Off, 1..3. */
+#define GRKIT_HOST_HALATION 168
+/* Film date digits: 0 Classic, 1 GR1s dot matrix, 2 GR II. */
+#define GRKIT_HOST_STAMP_LOOK 172
 /* Icon of the GRKit tile. */
 #define GRKIT_HOST_PLUGINS_ICON 176
 /* Private toolbar cell, or 0. */
@@ -129,6 +138,37 @@
 /* Return to GRKit Image Control after the native parameter page: 1 opening, 2
    away. */
 #define GRKIT_HOST_RETURN 252
+/* Neutral shadow floor: 0 Off, 1..3. */
+#define GRKIT_HOST_BLACK_FLOOR 256
+/* Split-tone preset: 0 Off, 1..6. */
+#define GRKIT_HOST_SPLIT_TONE 260
+/* Colour range being edited: 0 disables the adjustments, 1..7 select a range. */
+#define GRKIT_HOST_COLOUR_RANGE 264
+/* Seven three-bit saturation codes. Each range retains its own setting. */
+#define GRKIT_HOST_COLOUR_SATURATION 268
+/* Seven three-bit hue codes. Each range retains its own setting. */
+#define GRKIT_HOST_COLOUR_HUE 272
+/* Seven three-bit brightness codes; zero is neutral. */
+#define GRKIT_HOST_COLOUR_BRIGHTNESS 276
+/* JPEG highlight shoulder: zero Off, 1..3 strength. */
+#define GRKIT_HOST_HIGHLIGHT_ROLLOFF 280
+/* Transient colour submenu: zero ranges, one parameters; never persisted. */
+#define GRKIT_HOST_COLOUR_MENU 284
+/* Soft shortcut selection: zero Off, one Fn in still live view. */
+#define GRKIT_HOST_SHORTCUT 288
+/* Transient held/pending flags; never persisted. */
+#define GRKIT_HOST_SHORTCUT_STATE 292
+/* Number of shortcut requests in this power session. */
+#define GRKIT_HOST_SHORTCUT_REQUESTS 296
+/* Current menu category: zero root, 1 Framing, 2 Tone, 3 Texture. */
+#define GRKIT_HOST_MENU_SECTION 300
+/* Additional saturation ranges for versioned five-bit controls. */
+#define GRKIT_HOST_SATURATION_UPPER 304
+/* Split-tone strength: zero legacy, 1..21 means Off..100%. */
+#define GRKIT_HOST_SPLIT_STRENGTH 308
+/* Keep the following native processing records aligned to 16 bytes. */
+#define GRKIT_HOST_CONTROL_RESERVED 312
+#define GRKIT_HOST_CONTROL_RESERVED_WORDS 2
 
 /* An Image Control record. The records follow the header. */
 #define GRKIT_RECORD_SIZE 0x740
@@ -190,14 +230,15 @@
    UTF-16 strings. At GRKIT_TEXT_SUMMARY, the installer writes the Image
    Control summary of each record in each language, GRKIT_SUMMARY_UNITS units
    each, language-major. */
-#define GRKIT_TEXT_SIZE 12288
+#define GRKIT_TEXT_SIZE 19456
 /* Everything after the records: the script array must hold it. */
-#define GRKIT_TAIL_SIZE 153736
-#define GRKIT_TEXT_SUMMARY 4096
+#define GRKIT_TAIL_SIZE 160904
+#define GRKIT_TEXT_SUMMARY 13312
 /* The parameter page title of a GRKit session, after the summaries: the page,
    its vtable, and the descriptor of the effect name. */
-#define GRKIT_TEXT_PARAMETER_TITLE 12272
+#define GRKIT_TEXT_PARAMETER_TITLE 19440
 #define GRKIT_TEXT_LANGUAGES 4
+#define GRKIT_TEXT_MENU_PATH 19312
 #define GRKIT_TEXT_RECORDS 20
 #define GRKIT_TEXT(h) ((h)[GRKIT_HOST_RECORDS/4]+(h)[GRKIT_HOST_COUNT/4]*GRKIT_RECORD_SIZE+GRKIT_PICTURE_SCRATCH)
 /* String IDs of the label table, in grkit_core::menu_text order. A run of IDs
@@ -212,20 +253,85 @@
 #define TEXT_RATIO 6
 /* Guides rows 1..4: thirds, center, golden ratio, diagonals. */
 #define TEXT_GUIDE 9
-/* Date Stamp rows 1..4: the date styles. */
-#define TEXT_STAMP 13
+/* Date Stamp rows 1..6: four data-back formats and two small mono styles. */
+#define TEXT_STAMP 14
+/* Format and Appearance. */
+#define TEXT_STAMP_MENU 21
+/* Classic, GR1s, GR II, Small Mono White, Small Mono Black. */
+#define TEXT_STAMP_LOOK 23
+/* Off and date ordering, independent of appearance. */
+#define TEXT_STAMP_FORMAT 28
 /* Grain rows 1..3: weak, medium, strong. */
-#define TEXT_GRAIN_LEVEL 17
-#define TEXT_IMAGE_OFF_SUMMARY 20
+#define TEXT_GRAIN_LEVEL 35
+#define TEXT_IMAGE_OFF_SUMMARY 38
+/* Capture ratio names. */
+#define TEXT_CROP_NAME 39
+/* Capture ratio summaries. */
+#define TEXT_CROP_SUMMARY 47
 /* Summaries for each value, Off first. */
-#define TEXT_FRAMING_SUMMARY 21
-#define TEXT_GUIDES_SUMMARY 25
-#define TEXT_STAMP_SUMMARY 30
-#define TEXT_GRAIN_SUMMARY 35
+#define TEXT_FRAMING_SUMMARY 55
+#define TEXT_GUIDES_SUMMARY 59
+#define TEXT_STAMP_SUMMARY 65
+#define TEXT_GRAIN_SUMMARY 74
 /* The Image Control summary before an effect name, for the installer. */
-#define TEXT_IMAGE_PREFIX 39
+#define TEXT_IMAGE_PREFIX 78
 /* The About row: the GRKit version. */
-#define TEXT_VERSION 40
-#define GRKIT_TEXT_STRINGS 41
+#define TEXT_VERSION 79
+/* GR III/IIIx grain percentages in ascending order. */
+#define TEXT_GRAIN_PERCENT 80
+#define TEXT_GRAIN_PERCENT_SUMMARY 100
+/* Experimental JPEG bloom. */
+#define TEXT_BLOOM 121
+/* Experimental JPEG halation. */
+#define TEXT_HALATION 122
+#define TEXT_BLACK_FLOOR 123
+/* Lift 1 to Lift 3. */
+#define TEXT_BLACK_FLOOR_LEVEL 124
+#define TEXT_SPLIT_TONING 127
+/* Preset and strength. */
+#define TEXT_SPLIT_MENU 128
+/* Off and four tint pairings. */
+#define TEXT_SPLIT_PRESET 130
+/* Shadow/highlight tint pairs. */
+#define TEXT_SPLIT_TONE_PRESET 139
+#define TEXT_COLOUR_RANGE 151
+/* Reds through magentas. */
+#define TEXT_COLOUR_RANGE_NAME 152
+#define TEXT_COLOUR_SATURATION 159
+/* Neutral, -25%, -50%, -75%, +25%, +50%. */
+#define TEXT_COLOUR_SATURATION_LEVEL 160
+#define TEXT_COLOUR_BRIGHTNESS 186
+/* Neutral, -20, -10, +10, +20 luma steps. */
+#define TEXT_COLOUR_BRIGHTNESS_LEVEL 187
+#define TEXT_HIGHLIGHT_ROLLOFF 196
+/* Twelve steps; original strengths retain saved codes. */
+#define TEXT_STRENGTH_LEVEL 197
+/* Soft, Medium, Strong. */
+#define TEXT_HIGHLIGHT_ROLLOFF_LEVEL 217
+/* Framing, Tone & Colour, Texture & Light. */
+#define TEXT_MENU_GROUP 220
+/* Group names with an opening arrow. */
+#define TEXT_MENU_GROUP_SUMMARY 223
+/* Short parent names in value-page headings. */
+#define TEXT_MENU_PARENT 226
+/* Explicit parent navigation. */
+#define TEXT_MENU_BACK 229
+#define TEXT_MENU_LOOKS 230
+#define TEXT_MENU_CROP 231
+#define TEXT_MENU_COLOUR 232
+/* Opt-in shooting shortcut. */
+#define TEXT_SOFT_SHORTCUT 233
+/* Normal Fn press in still live view. */
+#define TEXT_SHORTCUT_FN 234
+/* Off / Fn. */
+#define TEXT_SHORTCUT_SUMMARY 235
+#define TEXT_COLOUR_HUE 237
+/* Neutral, -20, -10, +10, +20. */
+#define TEXT_COLOUR_HUE_LEVEL 238
+/* Editing a disabled colour range. */
+#define TEXT_COLOUR_FIRST 247
+/* Off followed by each editing range. */
+#define TEXT_COLOUR_RANGE_SUMMARY 248
+#define GRKIT_TEXT_STRINGS 256
 
 #endif

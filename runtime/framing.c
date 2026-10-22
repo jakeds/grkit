@@ -33,8 +33,25 @@
 #endif
 extern volatile u32 *framing_header(void);
 
+#ifndef FRAMING_DISPLAY_MODE
+/* The native display mode that DISP cycles (runtime/targets), or 0 (full)
+   before the settings exist and on a target without it. */
+static u32 framing_display_mode(void) {
+#if defined(UI_SETTINGS_SLOT) && defined(DISPLAY_MODE_SETTING)
+    u32 settings=WORD(UI_SETTINGS_SLOT,0);
+    return settings ? BYTE(settings,DISPLAY_MODE_SETTING) : 0;
+#elif defined(DISPLAY_MODE_BYTE)
+    return BYTE(DISPLAY_MODE_BYTE,0);
+#else
+    return 0;
+#endif
+}
+#define FRAMING_DISPLAY_MODE() framing_display_mode()
+#endif
+
 /* Plugin services (runtime/plugin.h). */
 static u32 framing_ratios(void) { return FRAMING_RATIO_COUNT; }
+static u32 native_info_shown(void) { return FRAMING_DISPLAY_MODE()<2; }
 
 /* The plugin handler files and PLUGIN_LAYERS. */
 #include "generated/layers.h"
@@ -140,7 +157,42 @@ static u32 canvas_pixels(u32 canvas,u32 bitmap) {
     return data;
 }
 /* Photo area {left,top,right,bottom} on the 720x480 canvas for each capture area. */
-static const u16 photo_boxes[4][4]={{0,0,720,480},{0,107,720,373},{0,37,720,442},{40,0,680,480}};
+static const u16 photo_boxes[8][4]={{0,0,720,480},{0,107,720,373},{0,37,720,442},{40,0,680,480},{60,0,660,480},{80,0,640,480},{48,0,672,480},{120,0,600,480}};
+#ifdef GRKIT_TARGET_GR3_210
+/* MCU-aligned capture dimensions. Playback identifies the saved dimensions,
+   so changing the active crop never changes how older photos are classified. */
+static const u16 crop_sizes[8][4][2]={
+    {{0}},{{6000,2216},{4800,1776},{3360,1240},{1920,712}},{{0}},{{0}},
+    {{5008,4000},{4000,3200},{2800,2240},{1600,1280}},
+    {{4672,4000},{3728,3200},{2608,2240},{1488,1280}},
+    {{5200,4000},{4160,3200},{2912,2240},{1664,1280}},
+    {{4000,4000},{3200,3200},{2240,2240},{1280,1280}}
+};
+static u32 geometry_ratio(void) {
+    volatile u32 *h=framing_header();u32 file=((volatile u8 *)h)[GRKIT_HOST_FRAME_FILE];
+    u32 ratio=file ? (file>=2 ? file-1 : 0) : h[GRKIT_HOST_FRAME_RATIO/4];
+    return ratio<7 ? ratio : 0;
+}
+u32 framing_geometry(u32 size) {
+    u32 ratio=geometry_ratio();if(size>=4 || (!ratio || ratio==2 || ratio==3)) return 0;
+    return crop_sizes[ratio][size][0]|(u32)crop_sizes[ratio][size][1]<<16;
+}
+u32 framing_insets(u32 thumbnail) {
+    static const u8 small[8][2]={{0,16},{0,30},{0,16},{0,0},{6,0},{10,0},{2,0},{20,0}};
+    u32 ratio=geometry_ratio();if(!ratio) ratio=2;
+    u32 x=thumbnail ? small[ratio][0] : photo_boxes[ratio][0];
+    u32 y=thumbnail ? small[ratio][1] : ratio==2 ? 38 : photo_boxes[ratio][1];
+    return x|y<<16;
+}
+u32 framing_classify_size(u32 width,u32 height) {
+    if(width<height) {u32 swap=width;width=height;height=swap;}
+    for(u32 ratio=1;ratio<7;++ratio) if(ratio!=2 && ratio!=3) for(u32 size=0;size<4;++size)
+        if(width==crop_sizes[ratio][size][0] && height==crop_sizes[ratio][size][1]) {
+            ((volatile u8 *)framing_header())[GRKIT_HOST_FRAME_FILE]=(u8)(ratio+1);return ratio<<8|size;
+        }
+    ((volatile u8 *)framing_header())[GRKIT_HOST_FRAME_FILE]=1;return ~0U;
+}
+#endif
 void framing_prepare(u32 canvas) {
     volatile u32 *h=framing_header();
     /* Canvas::Draw clears the full native bitmap before drawing its children.

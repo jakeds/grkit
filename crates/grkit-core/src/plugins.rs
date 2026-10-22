@@ -14,7 +14,12 @@
 use std::fmt::Write;
 
 use crate::{
-    abi::{HOST_FRAME_RATIO, HOST_GRAIN, HOST_GUIDE, HOST_STAMP},
+    abi::{
+        HOST_BLACK_FLOOR, HOST_BLOOM, HOST_COLOUR_BRIGHTNESS, HOST_COLOUR_HUE, HOST_COLOUR_RANGE,
+        HOST_COLOUR_SATURATION, HOST_FRAME_RATIO, HOST_GRAIN, HOST_GUIDE, HOST_HALATION,
+        HOST_HIGHLIGHT_ROLLOFF, HOST_SATURATION_UPPER, HOST_SHORTCUT, HOST_SPLIT_STRENGTH,
+        HOST_SPLIT_TONE, HOST_STAMP, HOST_STAMP_LOOK,
+    },
     artwork, camera,
 };
 
@@ -36,16 +41,19 @@ pub enum Point {
     PictureEncode,
     /// The native grain stage of recorded pictures.
     PipelineGrain,
+    /// Opt-in shooting-button entry to the existing private menu.
+    ShootingShortcut,
 }
 
 impl Point {
-    pub const ALL: [Point; 6] = [
+    pub const ALL: [Point; 7] = [
         Point::MenuPage,
         Point::Tuning,
         Point::ViewfinderOverlay,
         Point::CaptureAspect,
         Point::PictureEncode,
         Point::PipelineGrain,
+        Point::ShootingShortcut,
     ];
 
     pub fn name(self) -> &'static str {
@@ -56,6 +64,7 @@ impl Point {
             Point::CaptureAspect => "capture.aspect",
             Point::PictureEncode => "picture.encode",
             Point::PipelineGrain => "pipeline.grain",
+            Point::ShootingShortcut => "shooting.shortcut",
         }
     }
 
@@ -144,13 +153,9 @@ impl Plugin {
     }
 }
 
-fn no_artwork() -> Vec<Vec<u8>> {
-    Vec::new()
-}
-
 /// The plugins in menu order. Plugin n is bit n of a selection
 /// (`GRKIT_HOST_PLUGINS`) and module n of the menu.
-pub const PLUGINS: [Plugin; 5] = [
+pub const PLUGINS: [Plugin; 15] = [
     Plugin {
         id: "image-control",
         points: &[Point::MenuPage, Point::Tuning, Point::PictureEncode],
@@ -160,8 +165,8 @@ pub const PLUGINS: [Plugin; 5] = [
             word: None,
             max: 0xffff,
         }],
-        tiles: 0,
-        artwork: no_artwork,
+        tiles: 4,
+        artwork: || artwork::soft_tiles("looks"),
         handlers: Some("selective.c"),
         layers: &[],
         encoders: &[Encoder {
@@ -181,10 +186,10 @@ pub const PLUGINS: [Plugin; 5] = [
         state: &[StateKey {
             name: "ratio",
             word: Some(HOST_FRAME_RATIO),
-            max: 3,
+            max: 6,
         }],
-        tiles: 4,
-        artwork: artwork::framing_tiles,
+        tiles: 1,
+        artwork: || artwork::soft_tiles("framing"),
         handlers: Some("framing.c"),
         layers: &[
             Layer {
@@ -210,10 +215,10 @@ pub const PLUGINS: [Plugin; 5] = [
         state: &[StateKey {
             name: "style",
             word: Some(HOST_GUIDE),
-            max: 4,
+            max: 5,
         }],
-        tiles: 5,
-        artwork: artwork::guides_tiles,
+        tiles: 1,
+        artwork: || artwork::soft_tiles("guides"),
         handlers: Some("guides.c"),
         layers: &[Layer {
             value: "guides_value",
@@ -227,13 +232,25 @@ pub const PLUGINS: [Plugin; 5] = [
         id: "date-stamp",
         points: &[Point::MenuPage, Point::PictureEncode],
         needs_effects: false,
-        state: &[StateKey {
-            name: "style",
-            word: Some(HOST_STAMP),
-            max: 4,
-        }],
-        tiles: 5,
-        artwork: artwork::stamp_tiles,
+        state: &[
+            StateKey {
+                name: "style",
+                word: Some(HOST_STAMP),
+                max: 8,
+            },
+            StateKey {
+                name: "look",
+                word: Some(HOST_STAMP_LOOK),
+                max: 4,
+            },
+        ],
+        tiles: 2,
+        artwork: || {
+            vec![
+                artwork::soft_symbol("date-stamp"),
+                artwork::soft_symbol("digits"),
+            ]
+        },
         handlers: Some("stamp.c"),
         layers: &[],
         // After selective color, so the stamp keeps its own color.
@@ -250,10 +267,198 @@ pub const PLUGINS: [Plugin; 5] = [
         state: &[StateKey {
             name: "level",
             word: Some(HOST_GRAIN),
-            max: 3,
+            max: 52,
         }],
-        tiles: 4,
-        artwork: artwork::grain_tiles,
+        tiles: 1,
+        artwork: || artwork::soft_tiles("grain"),
+        handlers: None,
+        layers: &[],
+        encoders: &[],
+    },
+    Plugin {
+        id: "bloom",
+        points: &[Point::MenuPage, Point::PictureEncode],
+        needs_effects: false,
+        state: &[StateKey {
+            name: "level",
+            word: Some(HOST_BLOOM),
+            max: 52,
+        }],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("bloom"),
+        handlers: Some("encode.c"),
+        layers: &[],
+        encoders: &[Encoder {
+            wanted: "bloom_wanted",
+            encode: "bloom_encode",
+            order: 15,
+        }],
+    },
+    Plugin {
+        id: "halation",
+        points: &[Point::MenuPage, Point::PictureEncode],
+        needs_effects: false,
+        state: &[StateKey {
+            name: "level",
+            word: Some(HOST_HALATION),
+            max: 52,
+        }],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("halation"),
+        handlers: Some("encode.c"),
+        layers: &[],
+        encoders: &[Encoder {
+            wanted: "halation_wanted",
+            encode: "halation_encode",
+            order: 16,
+        }],
+    },
+    Plugin {
+        id: "black-floor",
+        points: &[Point::MenuPage, Point::PictureEncode],
+        needs_effects: false,
+        state: &[StateKey {
+            name: "value",
+            word: Some(HOST_BLACK_FLOOR),
+            max: 52,
+        }],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("black-floor"),
+        handlers: Some("encode.c"),
+        layers: &[],
+        encoders: &[Encoder {
+            wanted: "black_floor_wanted",
+            encode: "black_floor_encode",
+            order: 11,
+        }],
+    },
+    Plugin {
+        id: "split-toning",
+        points: &[Point::MenuPage, Point::PictureEncode],
+        needs_effects: false,
+        state: &[
+            StateKey {
+                name: "value",
+                word: Some(HOST_SPLIT_TONE),
+                max: 16,
+            },
+            StateKey {
+                name: "strength",
+                word: Some(HOST_SPLIT_STRENGTH),
+                max: 21,
+            },
+        ],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("split-toning"),
+        handlers: Some("encode.c"),
+        layers: &[],
+        encoders: &[Encoder {
+            wanted: "split_toning_wanted",
+            encode: "split_toning_encode",
+            order: 13,
+        }],
+    },
+    Plugin {
+        id: "colour-range",
+        points: &[Point::MenuPage, Point::PictureEncode],
+        needs_effects: false,
+        state: &[StateKey {
+            name: "value",
+            word: Some(HOST_COLOUR_RANGE),
+            max: 7,
+        }],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("colour-range"),
+        handlers: Some("encode.c"),
+        layers: &[],
+        encoders: &[Encoder {
+            wanted: "colour_range_wanted",
+            encode: "colour_range_encode",
+            order: 12,
+        }],
+    },
+    Plugin {
+        id: "colour-saturation",
+        points: &[Point::MenuPage],
+        needs_effects: false,
+        state: &[
+            StateKey {
+                name: "value",
+                word: Some(HOST_COLOUR_SATURATION),
+                max: 536870911,
+            },
+            StateKey {
+                name: "upper",
+                word: Some(HOST_SATURATION_UPPER),
+                max: 32767,
+            },
+        ],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("colour-saturation"),
+        handlers: None,
+        layers: &[],
+        encoders: &[],
+    },
+    Plugin {
+        id: "colour-hue",
+        points: &[Point::MenuPage],
+        needs_effects: false,
+        state: &[StateKey {
+            name: "value",
+            word: Some(HOST_COLOUR_HUE),
+            max: 536870911,
+        }],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("colour-hue"),
+        handlers: None,
+        layers: &[],
+        encoders: &[],
+    },
+    Plugin {
+        id: "colour-brightness",
+        points: &[Point::MenuPage],
+        needs_effects: false,
+        state: &[StateKey {
+            name: "value",
+            word: Some(HOST_COLOUR_BRIGHTNESS),
+            max: 536870911,
+        }],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("colour-brightness"),
+        handlers: None,
+        layers: &[],
+        encoders: &[],
+    },
+    Plugin {
+        id: "highlight-rolloff",
+        points: &[Point::MenuPage, Point::PictureEncode],
+        needs_effects: false,
+        state: &[StateKey {
+            name: "value",
+            word: Some(HOST_HIGHLIGHT_ROLLOFF),
+            max: 52,
+        }],
+        tiles: 1,
+        artwork: || artwork::soft_tiles("highlight-rolloff"),
+        handlers: Some("encode.c"),
+        layers: &[],
+        encoders: &[Encoder {
+            wanted: "highlight_rolloff_wanted",
+            encode: "highlight_rolloff_encode",
+            order: 14,
+        }],
+    },
+    Plugin {
+        id: "soft-shortcut",
+        points: &[Point::MenuPage, Point::ShootingShortcut],
+        needs_effects: false,
+        state: &[StateKey {
+            name: "value",
+            word: Some(HOST_SHORTCUT),
+            max: 1,
+        }],
+        tiles: 0,
+        artwork: Vec::new,
         handlers: None,
         layers: &[],
         encoders: &[],
@@ -612,7 +817,23 @@ mod tests {
         let keys: Vec<_> = PLUGINS.iter().map(Plugin::key).collect();
         assert_eq!(
             keys,
-            ["imageControl", "framing", "guides", "dateStamp", "grain"]
+            [
+                "imageControl",
+                "framing",
+                "guides",
+                "dateStamp",
+                "grain",
+                "bloom",
+                "halation",
+                "blackFloor",
+                "splitToning",
+                "colourRange",
+                "colourSaturation",
+                "colourHue",
+                "colourBrightness",
+                "highlightRolloff",
+                "softShortcut"
+            ]
         );
         assert_eq!(PLUGINS[3].c_name(), "DATE_STAMP");
         assert!(NAMES.iter().all(|name| name

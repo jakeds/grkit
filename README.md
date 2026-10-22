@@ -1,5 +1,24 @@
 # GRKit
 
+## Soft edition — experimental GR IIIx 1.60
+
+[Open the Soft builder](https://soft-gr.jakeds372351.chatgpt.site) · [Soft source branch](https://github.com/jakeds/grkit/tree/jake/gr3x-seeded-grain)
+
+The Soft builder is specific to GR IIIx firmware 1.60. It includes six everyday looks by default, with the remaining collection optional. Controls are grouped into framing, tone, colour, texture and date. New effects start off or neutral on a fresh setup; existing camera settings are retained.
+
+This branch contains the complete Soft runtime and builder source. The upstream documentation below also describes other cameras and release tooling; those are not a validation claim for this edition.
+
+
+This fork adds moment-derived seeds through Ricoh’s native grain engine, 5% amplitude steps from 5% to 100%, and solid composing masks for 4:3, 5:4, 6x7 and FP100C. Native Weak/Medium/Strong correspond to 25/50/100%. Old saved strength codes retain their meaning. Custom crop playback uses experimental classification adapters.
+
+The seed is sampled when grain processing runs, not at the exact shutter instant. It combines the native clock value, local calendar time and a counter since startup. It is not saved in image metadata and is not guaranteed globally unique. Re-developing a RAW generates new grain. Off preserves Ricoh’s original seed and strength behaviour.
+
+The builder targets GR IIIx firmware 1.60 only. Host tests and ARM emulation cover the custom hooks; this edition has not been tested on a camera. Install only from its complete SD package and read the included recovery guide. Delete `SCRIPT` from the card with the camera off to remove it. The SD-script enable setting remains enabled.
+
+Offline verification: `python tools/verify-gr3x-native-grain.py /private/path/to/gr3x-160-rtos.bin build/soft-runtime-final/objects/module-framing.elf` (requires Python Unicorn). Keep official firmware, decoded bytes and build objects out of Git.
+
+---
+
 English | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md) | [日本語](README.ja.md)
 
 [![Tests](https://github.com/ahonn/grkit/actions/workflows/tests.yml/badge.svg)](https://github.com/ahonn/grkit/actions/workflows/tests.yml)
@@ -13,15 +32,15 @@ Photo: [Snow in Akihabara](https://www.flickr.com/photos/cafetricot/51803682755/
 
 ## Features
 
-GRKit adds a sixth entry, GRK, to the ADJ menu. It has five modules:
+Soft uses the first ADJ slot assigned to Image Control. It adds these controls:
 
 - **Image Control**: 16 film looks, such as Portra 400, Velvia 100, and Tri-X 400. The viewfinder previews the look.
-- **Framing**: XPan (65:24), 16:9, or 4:3 photos. The viewfinder dims the area outside the photo.
+- **Framing (GR III/IIIx)**: Native, 6x7 (7:6), 5:4, FP100C, 4:3 and 16:9. XPan is absent from the new menu. Custom dimensions and playback classification are experimental.
 - **Guides**: thirds, center, golden ratio, or diagonal lines.
 - **Date Stamp**: an orange date on the photo, like a film camera's data back.
-- **Grain**: film grain on the photo, in three strengths.
+- **Grain**: native film grain in 5% amplitude steps.
 
-The last row shows the GRKit version.
+Use Left to return to the parent menu, Right to open a submenu, and OK to apply a value without closing ADJ. There are no Back or version rows. Date Stamp separates Format from Appearance. Split Toning separates Preset from Strength, with warm presets first. Strengths are Off or 5–100% in 5% steps; saturation uses signed 5% steps, hue and brightness use signed steps of 5. Existing stored controls remain readable.
 
 You select the modules when you make a package. The menu shows only those modules.
 
@@ -44,7 +63,7 @@ Each HDF model runs the firmware of its base camera and uses the same package. O
 
 ## Install
 
-To make a package, go to [grkit.app](https://grkit.app). Select the camera, the modules, and the effects, then download `GRKit.zip`.
+For this edition, use the [Soft builder](https://soft-gr.jakeds372351.chatgpt.site). Choose your looks and controls, then download `Soft-GRIIIx.zip`. The original upstream builder is [grkit.app](https://grkit.app).
 
 Each package contains the installation guide for its camera as a PDF, in the language that you select. The recovery guide is at its end. The sources are:
 

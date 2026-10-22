@@ -1,3 +1,15 @@
+# Soft builder
+
+Public builder: https://soft-gr.jakeds372351.chatgpt.site
+
+This branch targets GR IIIx firmware 1.60. The browser selects film looks and camera controls and makes `Soft-GRIIIx.zip` locally. The on-camera runtime is experimental; browser validation does not prove physical camera behaviour.
+
+After building the matching WASM, runtime, effect tables and guides as described below, run `pnpm build` in `web/`, then `node web/scripts/export-site.mjs` from the repository root. The complete static site is written to `dist/soft-site`, including runtime data and licences. A web-only deployment without these matching files cannot make packages.
+
+The public GPT Site is a static snapshot of that directory; its source reference identifies the corresponding GitHub commit. Keep firmware inputs and decoded firmware outside the published site and Git.
+
+---
+
 # GRKit site
 
 The site lets a user select a camera, the modules, and the effects, preview the effects, and download `GRKit.zip`. The browser builds the package with `grkit-wasm`. No server code runs.

@@ -58,7 +58,7 @@ export const CAMERAS: readonly Camera[] = [
       firmware: '1.60',
       target: 'gr3-2.10',
       modeset: '00078490.609',
-      experimental: false,
+      experimental: true,
       modules: CAMERA_PLUGINS.gr3x,
     },
   },

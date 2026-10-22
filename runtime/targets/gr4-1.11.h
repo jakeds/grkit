@@ -69,8 +69,13 @@
 #define FW_LIST_ROW 0x53570a9c
 #define FW_LIST_SAVE 0x53570b3c
 #define FW_LIST_CURSOR 0x53570b6c
+#define FW_LIST_WIDTH 0x53570c10
 #define FW_LIST_RESTORE 0x5357157c
 #define FW_LIST_SET_CURSOR 0x53571788
+#define FW_LIST_MOVE 0x535715b8
+/* The list\'s row vector (first and end pointers) and its shown row count. */
+#define LIST_ROWS 0xf4
+#define LIST_COUNT 0x108
 #define FW_ROW_SET_ICON 0x5357dd98
 #define FW_ROW_SET_CHECK 0x5357e018
 
@@ -136,6 +141,9 @@
    EV_FN and acts on EV_FN_ACTION (0x531bd388). */
 #define FN_PRESS_ARG 2
 #define EV_FN_ACTION 0x187
+/* A press of the rear dial, which opens and closes ADJ, before the confirm
+   that OK also sends. */
+#define EV_ADJ_PRESS 0x23
 #define EV_TOUCH 0x31
 #define EV_LEFT 0xd4
 #define EV_RIGHT 0xd5
@@ -178,3 +186,5 @@
 #define PICTURE_NATIVE_ID(native) ((native)<=3 ? (native) : 0)
 
 #endif
+
+#define DISPLAY_MODE_BYTE (0x55084dd8 + 0x1409)

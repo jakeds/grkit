@@ -85,6 +85,18 @@ draw_done:
     pop {r1, r2, r12, lr}
 draw_resume:
     ldr pc, =HOOK_MENU_TEXT_DRAW_RESUME
+#ifdef HOOK_MENU_LIVE_EVENT
+.global menu_live_event_original
+.type menu_live_event_original, %function
+menu_live_event_original:
+    .inst HOOK_MENU_LIVE_EVENT_STOCK
+    ldr pc, =HOOK_MENU_LIVE_EVENT_RESUME
+.global menu_live_start_original
+.type menu_live_start_original, %function
+menu_live_start_original:
+    .inst HOOK_MENU_LIVE_START_STOCK
+    ldr pc, =HOOK_MENU_LIVE_START_RESUME
+#endif
 .global menu_event_original
 .type menu_event_original, %function
 menu_event_original:

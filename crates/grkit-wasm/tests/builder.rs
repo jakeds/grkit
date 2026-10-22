@@ -74,12 +74,37 @@ fn omitted_plugins_are_written_and_checked() {
     let package = builder.build().unwrap();
     assert_eq!(
         packaging::verify_package(&package).unwrap()["plugins"],
-        json!(["image-control", "date-stamp", "grain"])
+        json!([
+            "image-control",
+            "date-stamp",
+            "grain",
+            "bloom",
+            "halation",
+            "black-floor",
+            "split-toning",
+            "colour-range",
+            "colour-saturation",
+            "colour-hue",
+            "colour-brightness",
+            "highlight-rolloff",
+            "soft-shortcut"
+        ])
     );
     // Without effects, omitting every other plugin leaves nothing to show.
     builder.omit_plugin("date-stamp").unwrap();
     builder.build().unwrap();
     builder.omit_plugin("grain").unwrap();
+    builder.omit_plugin("bloom").unwrap();
+    builder.omit_plugin("halation").unwrap();
+    builder.omit_plugin("black-floor").unwrap();
+    builder.omit_plugin("split-toning").unwrap();
+    builder.omit_plugin("colour-range").unwrap();
+    builder.omit_plugin("colour-saturation").unwrap();
+    builder.omit_plugin("colour-hue").unwrap();
+    builder.omit_plugin("colour-brightness").unwrap();
+    builder.omit_plugin("highlight-rolloff").unwrap();
+    builder.omit_plugin("soft-shortcut").unwrap();
+
     assert!(error(builder.build()).contains("shows no plugin"));
     builder.add_effect(&effect("test-a")).unwrap();
     builder.build().unwrap();

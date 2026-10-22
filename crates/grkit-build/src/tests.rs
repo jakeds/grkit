@@ -338,6 +338,8 @@ fn synthetic_arm_hooks_match_fixed_target_contract() -> Result<()> {
         (0x536e87c4, "module_gamma_curves", "891900eb", true),
     ];
     let menu_hooks = [
+        (0x531771c0, "menu_live_event", "0dc0a0e1", false),
+        (0x5317696c, "menu_live_start", "0dc0a0e1", false),
         (0x531a48f0, "menu_native_touch_0", "f431d0e5", false),
         (0x531a4904, "menu_native_touch_1", "f431d0e5", false),
         (0x531a4918, "menu_native_touch_2", "f431d0e5", false),
@@ -416,8 +418,11 @@ fn synthetic_arm_hooks_match_fixed_target_contract() -> Result<()> {
         (0x536e4774, "picture_post", "e9ffffeb", true),
         (0x535047d4, "picture_encode_entry", "0dc0a0e1", false),
         (0x53608080, "picture_capture_tone", "e1fdfeeb", true),
+        (0x536078f4, "picture_capture_parameters", "3302ffeb", true),
         (0x535031b0, "grain_particle", "9537d5e5", true),
         (0x5351361c, "grain_gate", "e7feffeb", true),
+        (0x5367ae28, "grain_amplitude", "020055e3", false),
+        (0x5368a970, "grain_seed", "4c001be5", true),
     ];
     let framing_instructions = [
         (0x53d553c8, "02010300", "00000300"),
@@ -430,21 +435,21 @@ fn synthetic_arm_hooks_match_fixed_target_contract() -> Result<()> {
         (
             &processing,
             0x540b6100,
-            0x540b6900u32,
+            0x540b6400u32,
             processing_hooks.as_slice(),
             [].as_slice(),
         ),
         (
             &menu,
-            0x540b6900,
-            0x540b9000u32,
+            0x540b6400,
+            0x540ba400u32,
             menu_hooks.as_slice(),
             menu_instructions.as_slice(),
         ),
         (
             &framing,
-            0x540b9000,
-            0x540be000u32,
+            0x540ba400,
+            0x540c2000u32,
             framing_hooks.as_slice(),
             framing_instructions.as_slice(),
         ),
@@ -540,7 +545,7 @@ fn generated_header_matches_fixed_synthetic_contract() -> Result<()> {
     let header = loader::header(&plan, &synthetic_firmware(), TEST_VERSION)?;
     assert_eq!(
         sha256(header.as_bytes()),
-        "60ad8f6e15a8dca3697a08a38f574f31c04168f8ed68ca459ab925db06797db9"
+        "ed123083bbf10b09927ce0259a47804a53ffd31bdff9eb88c4ca01317462689d"
     );
     Ok(())
 }
@@ -616,7 +621,9 @@ fn generated_header_gives_the_points_of_each_patch() -> Result<()> {
     // Code in the tail belongs to no extension point. Image Control needs the
     // menu, tuning, and picture encode points (bits 0, 1, and 4).
     assert!(header.contains("static const u32 patch_points[] = {0x0};"));
-    assert!(header.contains("static const u32 plugin_points[] = {0x13,0xd,0x5,0x11,0x21};"));
+    assert!(
+        header.contains("static const u32 plugin_points[] = {0x13,0xd,0x5,0x11,0x21,0x11,0x11,0x11,0x11,0x11,0x1,0x1,0x1,0x11,0x41};")
+    );
     Ok(())
 }
 
@@ -651,7 +658,7 @@ fn production_scripts_and_activation_match_fixed_contracts() {
         ),
         (
             "SCRIPT/PLUGINS/PLUGINS.TTL",
-            "f004224bfc4489475260a7659c13d4d84a1c27a30837ec74e775bf97190a49e8",
+            "5305f164c96862e2e89838303dfc9f7d2cdf378eaa28fb2c3965addad8c504fa",
         ),
         (
             "SCRIPT/PLUGINS/INSTALL.BIN",
@@ -722,10 +729,10 @@ fn each_point_has_its_hooks() {
     // The hooks of each point. The in-place patches add 1 to tuning, and on
     // GR III 5 to capture.aspect (build.json "points" counts both).
     for (layout, expected) in [
-        (&components::GR3_LAYOUT, [16, 47, 5, 9, 1, 2]),
-        (&components::GR4_LAYOUT, [15, 48, 5, 11, 1, 4]),
+        (&components::GR3_LAYOUT, [16, 48, 5, 9, 1, 4, 2]),
+        (&components::GR4_LAYOUT, [15, 49, 5, 11, 1, 4, 0]),
     ] {
-        let mut counts = [0; 6];
+        let mut counts = [0; 7];
         for (_, symbol) in components::hook_sites(layout) {
             counts[components::point_of(symbol).unwrap() as usize] += 1;
         }

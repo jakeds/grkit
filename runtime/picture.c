@@ -88,7 +88,7 @@ void picture_post(u32 object,u32 context,u32 settings) {
 #else
 /* Framing ratios (Off, XPan, 16:9, 4:3) apply only to native 3:2 captures. */
 #define PICTURE_AREA_ID(native,ratio) ((native) ? PICTURE_NATIVE_ID(native) : \
-    (ratio)==1 ? 4 : (ratio)==2 ? 2 : (ratio)==3 ? 1 : 0)
+    (ratio)==1 ? 4 : (ratio)==2 ? 2 : (ratio)==3 ? 1 : (ratio)>=4 && (ratio)<=6 ? (ratio)+1 : 0)
 #endif
 #ifndef PICTURE_SCRATCH
 /* Stamp masks after the header and the records, inside the loader's registry array. */
@@ -115,14 +115,18 @@ static void flush(const Plane *p) {
 }
 static void local_time(u8 *out) { PICTURE_DATE(out); }
 
+/* Bounded JPEG diffusion service, shared by the experimental plugins. */
+#include "diffusion.h"
+#include "colour.h"
+
 /* The plugin handler files and PLUGIN_ENCODERS. */
 #include "generated/encoders.h"
 
 /* Visible area of a preview picture: black bars depend on the capture aspect. */
 static void visible_area(volatile u32 *h,Plane *p) {
     /* Screennail and thumbnail insets for ids 0 (3:2), 1 (4:3), 2 (16:9), 3 (1:1), then XPan. */
-    static const u8 screennail[5][2]={{0,0},{40,0},{0,38},{120,0},{0,107}};
-    static const u8 thumbnail[5][2]={{0,8},{0,0},{0,16},{20,0},{0,30}};
+    static const u8 screennail[9][2]={{0,0},{40,0},{0,38},{120,0},{0,107},{60,0},{80,0},{48,0},{120,0}};
+    static const u8 thumbnail[9][2]={{0,8},{0,0},{0,16},{20,0},{0,30},{6,0},{10,0},{2,0},{20,0}};
     /* The capture area: the Framing ratio when Framing is installed. */
     u32 ratio=PLUGIN_INSTALLED(h,PLUGIN_FRAMING) ? h[GRKIT_HOST_FRAME_RATIO/4] : 0;
     u32 native=PICTURE_NATIVE_ASPECT(), id;
@@ -159,6 +163,25 @@ static u32 shot_record(volatile u32 *h,u32 shot) {
 }
 /* For picture_capture_tone: the record of a shot, or 0. */
 u32 picture_capture_record(u32 shot) { return shot_record(framing_header(),shot); }
+#ifndef PICTURE_IFD_SET_SHORT
+#define PICTURE_IFD_SET_SHORT(entry,index,value) (((void (*)(u32,u32,u32))FW_IFD_SET_SHORT)(entry,index,value))
+#endif
+/* For picture_capture_parameters: the maker-note adjustments (tag 0x247) of a
+   GRKit shot. The native fill reads the settings of the native Image Control
+   type. The record's Fn adjustments replace the nine Standard elements:
+   saturation, hue, key, contrast, highlight, shadow, sharpness, then shading
+   and clarity. An element holds the shown value, -4 to 4, as camera photos
+   show. A stored byte (GRKIT_RECORD_PARAMETERS) is the shown value mod 9, and
+   a byte above 8 counts as 0. */
+void picture_record_parameters(u32 entry,u32 shot) {
+    static const u8 elements[9]={0,1,2,3,4,5,6,9,10};
+    u32 record=picture_capture_record(shot), i, stored;
+    if(!record) return;
+    for(i=0;i<sizeof(elements);++i) {
+        stored=BYTE(record,GRKIT_RECORD_PARAMETERS+i);
+        PICTURE_IFD_SET_SHORT(entry,elements[i],stored>8 ? 0 : stored<=4 ? stored : (stored-9)&0xffffU);
+    }
+}
 /* The encode handlers in call order (Encoder.order in the registry). */
 static const Encoder encoders[]={PLUGIN_ENCODERS};
 #define ENCODER_COUNT (sizeof(encoders)/sizeof(encoders[0]))
@@ -199,3 +222,30 @@ void picture_encode(u32 process,u32 message) {
     for(i=0;i<ENCODER_COUNT;++i) if(wanted[i]) encoders[i].encode(h,&set);
     for(i=0;i<set.count;++i) flush(&set.planes[i]);
 }
+
+#ifdef GRKIT_TARGET_GR3_210
+/* Percentages describe native amplitude, not perceived texture density.
+   Codes 1/2/3 are retained for compatibility with existing STATE.TXT files. */
+u32 grain_amplitude_value(u32 particle) {
+    static const u16 amplitude[12]={0,64,128,256,26,51,77,102,154,179,205,230};
+    u32 code=framing_header()[GRKIT_HOST_GRAIN/4];
+    if(code && code<12) return amplitude[code];
+    if(code>=33 && code<=52) return ((code-32)*256+10)/20;
+    return particle==2 ? 128 : particle==3 ? 64 : 256;
+}
+static u32 grain_mix(u32 x) {
+    x^=x>>16; x*=0x7feb352d; x^=x>>15; x*=0x846ca68b; return x^(x>>16);
+}
+/* Sample the moment when native grain processing runs, not the shutter time.
+   The native noise engine still makes the texture. No libc RNG entry is patched.
+   The seed is 32-bit and has no global uniqueness guarantee. */
+u32 grain_seed_value(u32 low,u32 high) {
+    volatile u32 *h=framing_header();
+    u32 date[2],sequence,seed; u8 *dt=(u8 *)date;
+    date[0]=date[1]=0; local_time(dt);
+    sequence=__atomic_add_fetch(&h[GRKIT_HOST_GRAIN_SEQUENCE/4],1,__ATOMIC_RELAXED);
+    seed=grain_mix(low^grain_mix(high)^grain_mix(date[0])^grain_mix(date[1])^grain_mix(sequence)^0x534f4654U);
+    __atomic_store_n(&h[GRKIT_HOST_GRAIN_SEED/4],seed,__ATOMIC_RELAXED);
+    return seed;
+}
+#endif

@@ -20,6 +20,64 @@ typedef unsigned int u32;
 typedef unsigned short u16;
 typedef unsigned char u8;
 typedef short s16;
+/* Versioned 5% controls. Legacy codes remain readable until edited. */
+#define COLOUR_V2 (1U<<28)
+static inline u32 strength_code(u32 row) { return row && row<=20 ? row+32 : 0; }
+static inline u32 strength_value(u32 code) {
+    static const u8 units[13]={0,4,8,12,1,2,3,5,6,7,9,10,11};
+    return code<13 ? units[code] : 0;
+}
+static inline u32 strength_q(u32 code) {
+    return code>=33 && code<=52 ? ((code-32)*3072+10)/20 : strength_value(code)*256;
+}
+static inline u32 strength_row(u32 code,u32 diffusion) {
+    if(code>=33 && code<=52) return code-32;
+    u32 v=strength_value(code);if(diffusion) return ((v<=8 ? v : 2*v-8)*20+8)/16;
+    return (v*20+6)/12;
+}
+static inline u32 diffusion_gain(u32 code) {
+    if(code>=33 && code<=52) return ((code-32)*1024+10)/20;
+    u32 v=strength_value(code);return (v<=8 ? v : 2*v-8)*64;
+}
+static inline int colour_setting(u32 packed,u32 upper,u32 range,u32 saturation) {
+    static const signed char sat[8]={0,-25,-50,-75,25,50,-10,10},other[8]={0,-20,-10,10,20,-5,5,-15};
+    if(!(packed&COLOUR_V2)) return saturation ? sat[(packed>>(range*3))&7] : other[(packed>>(range*3))&7];
+    u32 code=saturation ? (range<4 ? (packed>>(range*5))&31 : (upper>>((range-4)*5))&31) : (packed>>(range*4))&15;
+    if(code>(saturation ? 25U : 8U)) return 0;
+    return code<=(saturation ? 15U : 4U) ? -(int)code*5 : (int)(code-(saturation ? 15U : 4U))*5;
+}
+static inline u32 colour_encode(int value,u32 saturation) { return value<=0 ? (u32)(-value/5) : (saturation ? 15U : 4U)+(u32)(value/5); }
+static inline u32 colour_menu_code(u32 row,u32 saturation) {
+    int value=(int)row*5-(saturation ? 75 : 20);return colour_encode(value,saturation);
+}
+static inline u32 colour_menu_row(u32 code,u32 saturation) {
+    int value=code<=(saturation ? 15U : 4U) ? -(int)code*5 : (int)(code-(saturation ? 15U : 4U))*5;
+    return (u32)((value+(saturation ? 75 : 20))/5);
+}
+static inline u32 colour_read(volatile u32 *h,u32 word,u32 max) {
+    u32 range=h[GRKIT_HOST_COLOUR_RANGE/4];(void)max;
+    if(!range || range>7) return 0;
+    u32 sat=word==GRKIT_HOST_COLOUR_SATURATION;
+    return colour_encode(colour_setting(h[word/4],sat ? h[GRKIT_HOST_SATURATION_UPPER/4] : 0,range-1,sat),sat);
+}
+static inline void colour_write(volatile u32 *h,u32 word,u32 code,u32 max) {
+    u32 range=h[GRKIT_HOST_COLOUR_RANGE/4],sat=word==GRKIT_HOST_COLOUR_SATURATION,lower=COLOUR_V2,upper=0;(void)max;
+    if(!range || range>7 || code>(sat ? 25U : 8U)) return;
+    for(u32 i=0;i<7;++i) {
+        u32 c=i==range-1 ? code : colour_encode(colour_setting(h[word/4],sat ? h[GRKIT_HOST_SATURATION_UPPER/4] : 0,i,sat),sat);
+        if(sat && i>=4) upper|=c<<((i-4)*5);else lower|=c<<(i*(sat ? 5 : 4));
+    }
+    if(sat) h[GRKIT_HOST_SATURATION_UPPER/4]=upper;
+    h[word/4]=lower==COLOUR_V2 && !upper ? 0 : lower;
+}
+static inline u32 split_preset(u32 code) {
+    static const u8 preset[17]={0,1,1,2,2,3,4,1,1,2,2,3,4,5,6,7,8};return code<17 ? preset[code] : 0;
+}
+static inline u32 split_percent(volatile u32 *h) {
+    static const u8 percent[17]={25,50,100,50,100,100,100,25,75,25,75,50,50,100,100,100,100};
+    u32 value=h[GRKIT_HOST_SPLIT_STRENGTH/4],code=h[GRKIT_HOST_SPLIT_TONE/4];
+    return value && value<=21 ? (value-1)*5 : code<17 ? percent[code] : 0;
+}
 /* A service or handler that a component or target may not use. */
 #define GRKIT_MAYBE_UNUSED __attribute__((unused))
 
@@ -103,6 +161,9 @@ typedef struct {
     /* Paint in the live view only, not on the ADJ canvas. */
     u32 live_only;
 } Layer;
+/* 1 while the native live view shows its information (DISP full or simple),
+   0 for no information and display off. */
+GRKIT_MAYBE_UNUSED static u32 native_info_shown(void);
 #ifndef OVERLAY_PIXELS
 #define OVERLAY_PIXELS(address) ((volatile u32 *)(address))
 #endif
@@ -134,6 +195,11 @@ typedef struct {
 } Encoder;
 
 /* Core services for encoders. */
+GRKIT_MAYBE_UNUSED static void diffusion_apply(const PictureSet *set,u32 level,u32 warm);
+GRKIT_MAYBE_UNUSED static void highlight_rolloff_apply_picture(volatile u32 *h,PictureSet *set);
+GRKIT_MAYBE_UNUSED static void black_floor_apply_picture(volatile u32 *h,PictureSet *set);
+GRKIT_MAYBE_UNUSED static void split_toning_apply_picture(volatile u32 *h,PictureSet *set);
+GRKIT_MAYBE_UNUSED static void colour_range_apply_picture(volatile u32 *h,PictureSet *set);
 /* Local time as DateTime: u16 year, then month, day, hour, minute, second. */
 GRKIT_MAYBE_UNUSED static void local_time(u8 *out);
 /* Unsigned division: the freestanding link has no division helper. */

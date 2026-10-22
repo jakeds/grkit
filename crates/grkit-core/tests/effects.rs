@@ -52,13 +52,20 @@ fn starter_definitions_match_existing_golden_bytes() {
 fn host_artwork_matches_golden_pixels_and_preserves_binary_transparency() {
     assert_eq!(
         hex::encode(Sha256::digest(artwork::plugins_pixels())),
-        "994c7df1e812485f987680a32ff1e4d02fbd49ff21039a098f7f849de7709e25"
+        "c007c55d54d8ce0c15106203045cd5b034509f70d7957582a21d94ee692210c4"
     );
     let modules = grkit_core::plugins::tiles();
-    // Four Framing, five Guides, five Date Stamp, and four Grain tiles,
-    // addressed by offset from the first.
+    // Control and category symbols, addressed by offset from the first.
     assert_eq!(modules.len(), 18);
-    assert_eq!(modules[0], artwork::framing_pixels());
+    assert_eq!(modules[0], artwork::soft_symbol("looks"));
+    assert_eq!(modules[1], artwork::soft_symbol("group-frame"));
+    assert_eq!(modules[2], artwork::soft_symbol("group-tone"));
+    for (i, a) in modules.iter().enumerate() {
+        assert!(
+            modules[..i].iter().all(|b| a != b),
+            "Soft symbols must be distinct"
+        );
+    }
     for pixels in [
         artwork::plugins_pixels(),
         artwork::off_pixels(),

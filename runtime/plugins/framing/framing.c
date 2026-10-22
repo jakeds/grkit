@@ -7,7 +7,7 @@
    ids 1 and 2 from its menu, but its capture and playback code support them. */
 GRKIT_MAYBE_UNUSED static u32 framing_capture_id(volatile u32 *h) {
     u32 ratio=h[GRKIT_HOST_FRAME_RATIO/4];
-    return ratio==3 ? 1 : ratio==1 || ratio==2 ? 2 : 0;
+    return ratio==3 ? 1 : ratio==1 || ratio==2 || (ratio>=4 && ratio<=6) ? 2 : 0;
 }
 
 /* The committed ratio, with an unknown value treated as Off. */
@@ -15,7 +15,7 @@ static u32 framing_value(volatile u32 *h) {
     u32 ratio=h[GRKIT_HOST_FRAME_RATIO/4];
     return ratio<framing_ratios() ? ratio : 0;
 }
-/* Black at 50% alpha outside the photo area. */
+/* Solid black outside 4:3; other aspect masks retain 50% alpha. */
 static void framing_mask(const Surface *s,u32 value) {
     u32 x,y;
     volatile u32 *row;
@@ -24,7 +24,7 @@ static void framing_mask(const Surface *s,u32 value) {
     for(y=0;y<480;++y) {
         row=OVERLAY_PIXELS(s->data+y*s->stride*4);
         for(x=0;x<720;++x)
-            if(y<s->box[1] || y>=s->box[3] || x<s->box[0] || x>=s->box[2]) row[x]=0x80000000;
+            if(y<s->box[1] || y>=s->box[3] || x<s->box[0] || x>=s->box[2]) row[x]=s->area>=3 ? 0xff000000 : 0x80000000;
     }
 }
 
@@ -53,8 +53,10 @@ static void framing_badge(const Surface *s,u32 value) {
     if(!ratio) return;
     for(y=46;y<68;++y) {
         row=OVERLAY_PIXELS(data+y*stride*4);
-        for(x=204;x<270;++x) row[x]=0x80000000;
+        for(x=204;x<270;++x) row[x]=ratio>=3 ? 0 : 0x80000000;
     }
+    /* Clear any previous ratio badge when switching to unlabelled 4:3. */
+    if(ratio>=3) return;
     for(i=0;labels[ratio-1][i]!=255;++i)
         for(x=0;x<5;++x) for(y=0;y<7;++y)
             if(glyphs[labels[ratio-1][i]][x]&(1U<<y))

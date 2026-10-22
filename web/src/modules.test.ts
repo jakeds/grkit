@@ -6,7 +6,7 @@ describe('planModules', () => {
     expect(planModules(ALL_MODULES, 2)).toEqual({
       includeEffects: true,
       omitted: [],
-      visible: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain'],
+      visible: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain', 'bloom', 'halation', 'blackFloor', 'splitToning', 'colourRange', 'colourSaturation', 'colourHue', 'colourBrightness', 'highlightRolloff', 'softShortcut'],
     });
   });
 
@@ -14,7 +14,7 @@ describe('planModules', () => {
     const enabled = new Set<ModuleKey>(['framing', 'dateStamp']);
     expect(planModules(enabled, 2)).toEqual({
       includeEffects: false,
-      omitted: ['image-control', 'guides', 'grain'],
+      omitted: ['image-control', 'guides', 'grain', 'bloom', 'halation', 'black-floor', 'split-toning', 'colour-range', 'colour-saturation', 'colour-hue', 'colour-brightness', 'highlight-rolloff', 'soft-shortcut'],
       visible: ['framing', 'dateStamp'],
     });
   });
@@ -30,6 +30,16 @@ describe('planModules', () => {
       'guides',
       'date-stamp',
       'grain',
+      'bloom',
+      'halation',
+      'black-floor',
+      'split-toning',
+      'colour-range',
+      'colour-saturation',
+      'colour-hue',
+      'colour-brightness',
+      'highlight-rolloff',
+      'soft-shortcut',
     ]);
   });
 
