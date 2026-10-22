@@ -774,3 +774,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 24px; }
   .header-download { padding: 0 12px; font-size: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+.camera-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 4px 0; }
+.camera-picker label { font-size: 14px; font-weight: 600; }
+.camera-picker select { font: inherit; font-size: 14px; padding: 10px 32px 10px 12px; background: var(--paper); color: var(--ink); border: 1px solid var(--ink); border-radius: 0; max-width: 100%; }
+.camera-picker > span { font-size: 13px; color: var(--muted); }

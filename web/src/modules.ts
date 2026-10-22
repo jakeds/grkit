@@ -30,12 +30,13 @@ export function planModules(
   enabled: ReadonlySet<ModuleKey>,
   effectCount: number,
   available: readonly ModuleKey[] = MODULES.map((module) => module.key),
+  excluded: readonly ModuleKey[] = [],
 ): ModulePlan {
-  const offered = MODULES.filter((module) => available.includes(module.key));
+  const offered = MODULES.filter((module) => available.includes(module.key) && !excluded.includes(module.key));
   const includeEffects = offered.some((module) => module.needsEffects && enabled.has(module.key));
   return {
     includeEffects,
-    omitted: offered.flatMap((module) => (enabled.has(module.key) ? [] : [module.plugin])),
+    omitted: MODULES.flatMap(module => excluded.includes(module.key) || (offered.includes(module) && !enabled.has(module.key)) ? [module.plugin] : []),
     visible: offered
       .filter((module) => enabled.has(module.key) && (!module.needsEffects || effectCount > 0))
       .map((module) => module.key),

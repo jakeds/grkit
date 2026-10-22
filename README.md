@@ -1,21 +1,27 @@
 # GRKit
 
-## Soft edition — experimental GR IIIx 1.60
+## Soft edition — experimental Ricoh GR builder
 
 [Open the Soft builder](https://soft-gr.jakeds372351.chatgpt.site) · [Soft source branch](https://github.com/jakeds/grkit/tree/jake/gr3x-seeded-grain)
 
-The Soft builder is specific to GR IIIx firmware 1.60. It includes six everyday looks by default, with the remaining collection optional. Controls are grouped into framing, tone, colour, texture and date. New effects start off or neutral on a fresh setup; existing camera settings are retained.
+Choose your camera, film looks and controls, then download an SD-card package. The photo previewer has been removed. Six everyday looks are selected by default; the rest are optional. New effects start off or neutral on a fresh setup; existing camera settings are retained.
 
-This branch contains the complete Soft runtime and builder source. The upstream documentation below also describes other cameras and release tooling; those are not a validation claim for this edition.
+| Camera, including its HDF model | Required firmware | Runtime |
+| --- | --- | --- |
+| GR III | 2.10 | gr3-2.10 |
+| GR IIIx | 1.60 | gr3-2.10 |
+| GR IV | 1.11 | gr4-1.11 |
+| GR IV Monochrome | 1.00 | gr4-1.11, with Image Control excluded |
 
+III-series grain uses moment-derived seeds and 5% amplitude steps. GR IV uses native Weak/Medium/Strong grain. III-series custom crops include 6x7, 5:4, FP100C and 4:3; GR IV uses its native aspect controls and the upstream XPan extension. III-series Soft can borrow an Image Control ADJ slot; on IV select the extra Soft ADJ entry.
 
-This fork adds moment-derived seeds through Ricoh’s native grain engine, 5% amplitude steps from 5% to 100%, and solid composing masks for 4:3, 5:4, 6x7 and FP100C. Native Weak/Medium/Strong correspond to 25/50/100%. Old saved strength codes retain their meaning. Custom crop playback uses experimental classification adapters.
+This edition has software/package validation but its custom features have not been verified on every physical camera model. GR IV uses a separate compiled runtime, with expanded, non-overlapping regions in the executable RTOS tail below the data mapping. Upstream's tested status does not establish hardware validation of Soft. No GR II or older model support is implied.
 
-The seed is sampled when grain processing runs, not at the exact shutter instant. It combines the native clock value, local calendar time and a counter since startup. It is not saved in image metadata and is not guaranteed globally unique. Re-developing a RAW generates new grain. Off preserves Ricoh’s original seed and strength behaviour.
+The seed is sampled when grain processing runs, not at the exact shutter instant. It combines the native clock value, local calendar time and a counter since startup. It is not saved in image metadata and is not guaranteed globally unique. Re-developing a RAW generates new grain.
 
-The builder targets GR IIIx firmware 1.60 only. Host tests and ARM emulation cover the custom hooks; this edition has not been tested on a camera. Install only from its complete SD package and read the included recovery guide. Delete `SCRIPT` from the card with the camera off to remove it. The SD-script enable setting remains enabled.
+Install only from the complete package for your exact model and firmware. The website gives model-specific activation filenames and one-time SD-script instructions. With the camera off, deleting SCRIPT stops loading Soft; SD-script activation itself remains enabled.
 
-Offline verification: `python tools/verify-gr3x-native-grain.py /private/path/to/gr3x-160-rtos.bin build/soft-runtime-final/objects/module-framing.elf` (requires Python Unicorn). Keep official firmware, decoded bytes and build objects out of Git.
+Offline grain verification: `python tools/verify-gr3x-native-grain.py /private/path/to/gr3x-160-rtos.bin build/soft-runtime-final/objects/module-framing.elf` (requires Python Unicorn). Keep official firmware, decoded bytes and build objects out of Git.
 
 ---
 

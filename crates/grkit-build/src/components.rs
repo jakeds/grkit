@@ -465,11 +465,13 @@ const GR4_GUARDS: &[(u32, &str)] = &[
 pub const GR4_LAYOUT: Layout = Layout {
     define: "-DGRKIT_TARGET_GR4_111",
     // After the decoded RTOS image (0x543d2ac0), like GR III.
-    tail: (0x543d3000, 0x543dc000),
+    // Soft's expanded menu and JPEG controls remain in the executable RTOS
+    // tail, below the 0x55000000 data mapping. Keep component regions disjoint.
+    tail: (0x543d3000, 0x543e0000),
     processing: Some((0x543d3100, 0x543d3900)),
     processing_source: include_str!("../../../runtime/targets/gr4-1.11-processing.S"),
-    menu: (0x543d3900, 0x543d6000),
-    framing: Some((0x543d6000, 0x543dc000)),
+    menu: (0x543d3900, 0x543d7900),
+    framing: Some((0x543d7900, 0x543e0000)),
     contexts: GR4_CONTEXTS,
     processing_hooks: GR4_PROCESSING_HOOKS,
     menu_hooks: GR4_MENU_HOOKS,

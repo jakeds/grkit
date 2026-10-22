@@ -17,5 +17,14 @@
     "default upstream icon artwork",
     "native Date Imprint borrowed MENU-submenu framework"
   ],
-  "hardware_tested": false
+  "hardware_tested": false,
+  "camera_support_review": {
+    "head": "daf6955a6c580cb99d567dd8ab842f5c9e6076b4",
+    "adopted": [
+      "HDF grouping by base package",
+      "GR IV Monochrome 1.00 uses GR IV 1.11 runtime",
+      "Monochrome always excludes Image Control"
+    ],
+    "scope": "Official firmware builds only; newer upstream relocation work is not ported."
+  }
 }

@@ -18,6 +18,7 @@ export interface Camera {
     experimental: boolean;
     /** The modules that the runtime has, in menu order (`camera.rs`, through `CAMERA_PLUGINS`). */
     modules: readonly ModuleKey[];
+    excluded?: readonly ModuleKey[];
     /** Framing offers only XPan, as a crop of native 16:9. */
     xpanOnly?: boolean;
   };
@@ -26,7 +27,7 @@ export interface Camera {
 export const CAMERAS: readonly Camera[] = [
   {
     id: 'gr3',
-    name: 'GR III',
+    name: 'GR III / GR III HDF',
     support: {
       package: 'gr3',
       firmware: '2.10',
@@ -37,34 +38,10 @@ export const CAMERAS: readonly Camera[] = [
     },
   },
   // GR III HDF runs the GR III firmware and uses its package. It has not been tested on a camera.
-  {
-    id: 'gr3hdf',
-    name: 'GR III HDF',
-    support: {
-      package: 'gr3',
-      firmware: '2.10',
-      target: 'gr3-2.10',
-      modeset: '00078350.588',
-      experimental: true,
-      modules: CAMERA_PLUGINS.gr3,
-    },
-  },
   // GR IIIx 1.60 runs the GR III 2.10 code, so it uses the same runtime.
   {
     id: 'gr3x',
-    name: 'GR IIIx',
-    support: {
-      package: 'gr3x',
-      firmware: '1.60',
-      target: 'gr3-2.10',
-      modeset: '00078490.609',
-      experimental: true,
-      modules: CAMERA_PLUGINS.gr3x,
-    },
-  },
-  {
-    id: 'gr3xhdf',
-    name: 'GR IIIx HDF',
+    name: 'GR IIIx / GR IIIx HDF',
     support: {
       package: 'gr3x',
       firmware: '1.60',
@@ -85,6 +62,20 @@ export const CAMERAS: readonly Camera[] = [
       modeset: '00078560.636',
       experimental: true,
       modules: CAMERA_PLUGINS.gr4,
+      xpanOnly: true,
+    },
+  },
+  {
+    id: 'gr4m',
+    name: 'GR IV Monochrome',
+    support: {
+      package: 'gr4',
+      firmware: '1.00',
+      target: 'gr4-1.11',
+      modeset: '00078560.636',
+      experimental: true,
+      modules: CAMERA_PLUGINS.gr4.filter(key => key !== 'imageControl'),
+      excluded: ['imageControl'],
       xpanOnly: true,
     },
   },

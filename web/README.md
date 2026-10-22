@@ -2,7 +2,7 @@
 
 Public builder: https://soft-gr.jakeds372351.chatgpt.site
 
-This branch targets GR IIIx firmware 1.60. The browser selects film looks and camera controls and makes `Soft-GRIIIx.zip` locally. The on-camera runtime is experimental; browser validation does not prove physical camera behaviour.
+The selector supports GR III / HDF 2.10, GR IIIx / HDF 1.60, GR IV / HDF 1.11 and experimental GR IV Monochrome 1.00. The browser selects film looks and camera controls and makes `Soft-GRIIIx.zip` locally. The on-camera runtime is experimental; browser validation does not prove physical camera behaviour.
 
 After building the matching WASM, runtime, effect tables and guides as described below, run `pnpm build` in `web/`, then `node web/scripts/export-site.mjs` from the repository root. The complete static site is written to `dist/soft-site`, including runtime data and licences. A web-only deployment without these matching files cannot make packages.
 
@@ -12,7 +12,7 @@ The public GPT Site is a static snapshot of that directory; its source reference
 
 # GRKit site
 
-The site lets a user select a camera, the modules, and the effects, preview the effects, and download `GRKit.zip`. The browser builds the package with `grkit-wasm`. No server code runs.
+The site lets a user select a camera, controls and film looks, and download a model-specific Soft ZIP. There is no photo preview or upload. The browser builds the package with `grkit-wasm`. No server code runs.
 
 The site serves these files:
 
@@ -58,47 +58,8 @@ pnpm test
 pnpm build
 ```
 
-## RAW preview
+## Camera differences
 
-The page opens with a GR IIIx sample photo. Uploads accept a DNG from any camera, including converted DNG files, with up to 120 megapixels. Other formats are not supported.
-The effects are fitted to the GR III, so the preview of another camera's photo is an approximation.
+The III-series uses gr3-2.10; GR IV and Monochrome use gr4-1.11. Publish both runtime directories, both effect catalogs and all three base-camera guides. Monochrome uses the GR IV package and activation file while excluding Image Control and all film looks. HDF variants use their base-camera package.
 
-A dedicated Worker decodes each upload with `@colorhythm/libraw-wasm` 1.1.1 (LibRaw 0.22.1).
-It reads sensor data, uses the recorded white balance, and produces half-size 16-bit linear sRGB.
-Automatic brightness and content-dependent white-level adjustment are disabled.
-The decoder applies orientation. The preview then applies the DNG default crop and resizes in linear light to a maximum edge of 1200 pixels.
-
-The worker terminates after completion, failure, cancellation, or a 60-second timeout.
-Selecting another photo or the default sample cancels the pending upload. Photos are not uploaded to a server.
-
-The `grkit-site-effects-v1` catalog describes linear-input LUTs with an sRGB coordinate shaper.
-The shaper allocates more grid points to shadows. It does not convert the input into a Standard JPEG.
-`preview/standard.lut` renders the baseline, and each effect table renders the same decoded pixels with the GRKit fit model.
-Both sides use the GR III model, including when the selected package targets GR IV.
-A second Worker applies the tables and encodes the JPEG previews, so a preview does not block scrolling or input.
-
-These previews are approximations. The model's exposure calibration is assumed, and LibRaw's color processing differs from the camera's processing.
-The 16-bit input clips values outside 0..1. It does not retain scene highlights above that range.
-
-## Default sample
-
-The default image is Snow in Akihabara by nagi usano, a GR IIIx JPEG released under CC BY 2.0. The README screenshot shows the same photo.
-`public/samples/akihabara.json` records its source URL, license, source SHA-256, processing settings, dimensions, and output SHA-256.
-The site also includes this attribution in `THIRD_PARTY_LICENSES.txt`, and the preview links to the source.
-
-The preview applies tables to linear pixels, but a JPEG holds developed pixels. `scripts/build-sample.mjs` therefore estimates the linear pixels: it inverts the Standard development of `preview/standard.lut` for each pixel. The baseline of the sample then matches the JPEG, and each effect starts from the same pixels as on a RAW photo. The JPEG keeps the look that its author gave it, so the sample shows the effects on that look.
-
-The checked-in `public/samples/akihabara.grlinear` contains gzip-compressed linear pixels, so visitors do not download or convert the full JPEG.
-After decompression, the format is eight ASCII bytes `GRLIN001`, little-endian u32 width and height, then little-endian u16 RGB samples.
-The custom extension prevents static servers from treating the inner gzip container as an HTTP content encoding.
-The sample builder uses the same resizing function as the browser decoder.
-
-To reproduce the sample:
-
-1. Download the JPEG from the source URL in `public/samples/akihabara.json` to a directory outside the repository.
-2. Get `preview/standard.lut` of `gr3-2.10` from the site data, for example `effects/gr3-2.10/preview/standard.lut` in `site.tar.gz` of a release.
-3. Run `node scripts/build-sample.mjs /path/to/Snow_in_Akihabara_2022-01-06.jpg /path/to/standard.lut` from `web/`. The script checks the source SHA-256 before it decodes the JPEG.
-4. Run `pnpm test`. The sample test checks its hash, attribution, dimensions, and pixel format.
-
-The RAW decoder is loaded only for uploads. Its WASM and JavaScript files are served from the site.
-LibRaw is distributed under CDDL-1.0. The site license file includes its notices and a link to the source and build instructions.
+The old preview-processing source and tests remain in the repository as reference, but the builder does not import, load or display the previewer.

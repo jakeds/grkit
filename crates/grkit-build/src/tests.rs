@@ -582,6 +582,11 @@ fn every_code_region_lies_in_the_tail() {
         (&target::GR4_111, &components::GR4_LAYOUT),
     ] {
         let (tail, end) = layout.tail;
+        assert!(
+            end <= target.data_start,
+            "{} overlaps writable data",
+            target.name
+        );
         // The decoded image ends where the startup .data copy source ends.
         assert!(
             tail >= target.data_source + target.data_size,
