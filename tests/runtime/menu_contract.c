@@ -555,20 +555,37 @@ int main(void)
     assert(PAGE_ICON(PLUGIN_GRAIN, 4) == GRAIN_LEVEL_ICON(2));
     menu_confirm(test_header);
     assert(test_header[GRKIT_HOST_MENU_LEVEL / 4] == MENU_MODULE && test_header[GRKIT_HOST_MODULE / 4] == PLUGIN_GRAIN);
-    assert(test_header[GRKIT_HOST_MENU_CURSOR / 4] == 10 && count(test_header) == 21);
+    assert(count(test_header)==3 && !grain_stage(test_header));
     assert(same(current_module(test_header)->title(test_header), "Grain"));
+    assert(menu_row_icon(test_header, 0)==GRKIT_ICON_GRKIT);
+    assert(menu_row_icon(test_header, 1)==GRAIN_ICON);
+    assert(menu_row_icon(test_header, 2)==module_icon(PLUGIN_IMAGE_CONTROL,GRKIT_ICON_TILE(3)));
+    assert(menu_right(test_header));
+    assert(test_header[GRKIT_HOST_MENU_CURSOR / 4] == 10 && count(test_header) == 21);
+    assert(same(menu_heading(test_header), "Grain / Strength"));
     for (u32 row = 0; row < 21; ++row) {
         test_header[GRKIT_HOST_MENU_CURSOR / 4] = row;
         menu_confirm(test_header);
         assert(test_header[GRKIT_HOST_GRAIN / 4] == strength_code(row));
         assert(current_module(test_header)->checked(test_header, row));
         assert(same(current_module(test_header)->label(test_header, row), grain_names[row]));
-        assert(CURRENT_ICON(row) == (row ? GRAIN_LEVEL_ICON(row<=3 ? 1 : row<=6 ? 2 : 3) : 0x7fff));
+        assert(menu_row_icon(test_header, row) == (row ? GRKIT_ICON_GRKIT : 0x7fff));
         assert(test_header[GRKIT_HOST_FRAME_RATIO / 4] == 3 && test_header[GRKIT_HOST_STAMP / 4] == 0);
         assert(test_header[GRKIT_HOST_ACTIVE / 4] == 0x59005000);
     }
     assert(menu_back(test_header) && test_header[GRKIT_HOST_MENU_CURSOR / 4] == 0);
     assert(same(current_module(test_header)->summary(test_header), "Grain: 100%"));
+    assert(!grain_stage(test_header) && count(test_header)==3);
+    test_header[GRKIT_HOST_MENU_CURSOR/4]=1;assert(menu_right(test_header));
+    assert(same(menu_heading(test_header), "Grain / Boost") && grain_value(test_header)==0);
+    for(u32 row=0;row<3;++row) {test_header[GRKIT_HOST_MENU_CURSOR/4]=row;menu_confirm(test_header);assert(test_header[GRKIT_HOST_GRAIN_BOOST/4]==row && grain_checked(test_header,row));}
+    assert(menu_back(test_header) && test_header[GRKIT_HOST_MENU_CURSOR/4]==1);
+    test_header[GRKIT_HOST_MENU_CURSOR/4]=2;assert(menu_right(test_header));
+    assert(same(menu_heading(test_header), "Grain / Pattern") && grain_value(test_header)==0);
+    test_header[GRKIT_HOST_MENU_CURSOR/4]=1;menu_confirm(test_header);assert(test_header[GRKIT_HOST_GRAIN_PATTERN/4]==1);
+    test_header[GRKIT_HOST_MENU_CURSOR/4]=0;menu_confirm(test_header);assert(!test_header[GRKIT_HOST_GRAIN_PATTERN/4]);
+    assert(menu_back(test_header) && test_header[GRKIT_HOST_MENU_CURSOR/4]==2);
+    test_header[GRKIT_HOST_GRAIN_BOOST/4]=0;
     test_header[GRKIT_HOST_GRAIN / 4] = 999;
     assert(grain_level(test_header) == 0);
     test_header[GRKIT_HOST_GRAIN / 4] = 0;

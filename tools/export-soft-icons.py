@@ -16,7 +16,9 @@ images=[]
 for i,n in enumerate(names):
  blob=png(a[i*6400:(i+1)*6400]);key=n.lower().replace(' ','-');out.joinpath(key+'.png').write_bytes(blob);images.append((n,base64.b64encode(blob).decode()))
 soft=png(array('plugins_pixels'));out.joinpath('soft.png').write_bytes(soft)
-svg=['<svg xmlns="http://www.w3.org/2000/svg" width="920" height="790" viewBox="0 0 920 790"><rect width="920" height="790" fill="#171a1b"/><text x="46" y="56" fill="#eeebe0" font-family="sans-serif" font-size="24">Soft · camera symbols</text><text x="46" y="86" fill="#a1a7a7" font-family="sans-serif" font-size="14">Custom artwork from the camera build · shown at 2× size</text>']
+for key,blob in [('grain-strength',soft),('grain-boost',png(a[8*6400:9*6400])),('grain-pattern',png(a[3*6400:4*6400]))]:
+ out.joinpath(key+'.png').write_bytes(blob);images.append((key.replace('-',' ').title(),base64.b64encode(blob).decode()))
+svg=['<svg xmlns="http://www.w3.org/2000/svg" width="920" height="910" viewBox="0 0 920 910"><rect width="920" height="910" fill="#171a1b"/><text x="46" y="56" fill="#eeebe0" font-family="sans-serif" font-size="24">Soft · camera symbols</text><text x="46" y="86" fill="#a1a7a7" font-family="sans-serif" font-size="14">Custom artwork from the camera build · shown at 2× size</text>']
 for i,(n,b) in enumerate(images):
  x=44+(i%4)*220;y=120+(i//4)*125
  svg.append(f'<image x="{x}" y="{y}" width="80" height="80" href="data:image/png;base64,{b}"/><text x="{x+92}" y="{y+45}" fill="#eeebe0" font-family="sans-serif" font-size="14">{n}</text>')

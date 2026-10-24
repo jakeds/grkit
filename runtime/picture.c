@@ -228,10 +228,15 @@ void picture_encode(u32 process,u32 message) {
    Codes 1/2/3 are retained for compatibility with existing STATE.TXT files. */
 u32 grain_amplitude_value(u32 particle) {
     static const u16 amplitude[12]={0,64,128,256,26,51,77,102,154,179,205,230};
-    u32 code=framing_header()[GRKIT_HOST_GRAIN/4];
-    if(code && code<12) return amplitude[code];
-    if(code>=33 && code<=52) return ((code-32)*256+10)/20;
-    return particle==2 ? 128 : particle==3 ? 64 : 256;
+    volatile u32 *h=framing_header();
+    u32 code=h[GRKIT_HOST_GRAIN/4],base,boost=h[GRKIT_HOST_GRAIN_BOOST/4];
+    if(code && code<12) base=amplitude[code];
+    else if(code>=33 && code<=52) base=((code-32)*256+10)/20;
+    else return particle==2 ? 128 : particle==3 ? 64 : 256;
+    /* Default and corrupt values preserve the previous amplitude exactly. */
+    if(boost==1) return (base*3+1)/2;
+    if(boost==2) return base*2;
+    return base;
 }
 static u32 grain_mix(u32 x) {
     x^=x>>16; x*=0x7feb352d; x^=x>>15; x*=0x846ca68b; return x^(x>>16);
@@ -241,6 +246,12 @@ static u32 grain_mix(u32 x) {
    The seed is 32-bit and has no global uniqueness guarantee. */
 u32 grain_seed_value(u32 low,u32 high) {
     volatile u32 *h=framing_header();
+    /* Fixed is opt-in. Default/unknown modes take the original moment path
+       below unchanged, including its clock inputs and atomic sequence. */
+    if(h[GRKIT_HOST_GRAIN_PATTERN/4]==1) {
+        __atomic_store_n(&h[GRKIT_HOST_GRAIN_SEED/4],0x534f4654U,__ATOMIC_RELAXED);
+        return 0x534f4654U;
+    }
     u32 date[2],sequence,seed; u8 *dt=(u8 *)date;
     date[0]=date[1]=0; local_time(dt);
     sequence=__atomic_add_fetch(&h[GRKIT_HOST_GRAIN_SEQUENCE/4],1,__ATOMIC_RELAXED);

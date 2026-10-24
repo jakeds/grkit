@@ -166,9 +166,10 @@
 #define GRKIT_HOST_SATURATION_UPPER 304
 /* Split-tone strength: zero legacy, 1..21 means Off..100%. */
 #define GRKIT_HOST_SPLIT_STRENGTH 308
-/* Keep the following native processing records aligned to 16 bytes. */
-#define GRKIT_HOST_CONTROL_RESERVED 312
-#define GRKIT_HOST_CONTROL_RESERVED_WORDS 2
+/* GR III/IIIx optional grain amplitude multiplier: 0 Default, 1 1.5x, 2 2x. */
+#define GRKIT_HOST_GRAIN_BOOST 312
+/* GR III/IIIx seed mode: 0 existing moment-derived seed, 1 fixed seed. */
+#define GRKIT_HOST_GRAIN_PATTERN 316
 
 /* An Image Control record. The records follow the header. */
 #define GRKIT_RECORD_SIZE 0x740
@@ -332,6 +333,12 @@
 #define TEXT_COLOUR_FIRST 247
 /* Off followed by each editing range. */
 #define TEXT_COLOUR_RANGE_SUMMARY 248
-#define GRKIT_TEXT_STRINGS 256
+/* Strength, optional amplitude boost and seed pattern. */
+#define TEXT_GRAIN_MENU 256
+/* Default path or experimental amplitude multipliers. */
+#define TEXT_GRAIN_BOOST 259
+/* Existing moment seed or fixed generator seed. */
+#define TEXT_GRAIN_PATTERN 262
+#define GRKIT_TEXT_STRINGS 264
 
 #endif

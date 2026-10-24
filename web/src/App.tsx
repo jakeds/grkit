@@ -29,7 +29,7 @@ const CONTROL_COPY: Partial<Record<ModuleKey, { name: string; description: strin
   colourSaturation: { name: 'Saturation', description: 'Mute or enrich each colour.' },
   colourHue: { name: 'Hue', description: 'Shift each colour’s tone.' },
   colourBrightness: { name: 'Brightness', description: 'Lighten or darken each colour.' },
-  grain: { name: 'Grain', description: 'Native Ricoh grain, with a moment-based seed.' },
+  grain: { name: 'Grain', description: 'Native grain, with optional Boost and Pattern controls.' },
   bloom: { name: 'Bloom', description: 'Soft glow around highlights.' },
   halation: { name: 'Halation', description: 'Warm halos around bright edges.' },
   dateStamp: { name: 'Date stamp', description: 'Classic, dot matrix or small mono.' },
@@ -256,7 +256,7 @@ export function App() {
           <details className="help-panel">
             <summary>Camera differences and experimental features</summary>
             <p>III and IIIx share a runtime; HDF models use their base camera’s package. GR IV uses a separate runtime. Its grain uses native strengths and its extra crop is XPan. GR IV Monochrome excludes colour film looks.</p>
-            <p>Black lift and split toning have a stronger range in this update; saved percentages will look stronger. Grain keeps its existing Ricoh amplitude scale. New crop modes, III-series grain seeding and JPEG effects have software checks but still need physical camera testing. Bloom and halation may increase saving time. This is an SD-card runtime, not a replacement firmware image.</p>
+            <p>Black lift and split toning have a stronger range in this update; saved percentages will look stronger. III-series Grain now groups Strength, Boost and Pattern. Boost defaults to Default (no gain); Pattern defaults to Moment (the existing seed). Choose Fixed seed only for a repeatable generator pattern. Returning to Default and Moment bypasses both overrides. GR IV retains native strength controls. New crop modes, III-series grain seeding and JPEG effects have software checks but still need physical camera testing. Bloom and halation may increase saving time. This is an SD-card runtime, not a replacement firmware image.</p>
           </details>
           </div>
         </section>

@@ -345,6 +345,18 @@ int main(void)
         assert(grain_amplitude_value(1)==amplitudes[code]);
     }
     for(u32 row=1;row<=20;++row) {header[GRKIT_HOST_GRAIN/4]=strength_code(row);assert(grain_amplitude_value(1)==(row*256+10)/20);}
+    /* Default remains exact; opt-in gains are independent of Strength.
+       Corrupt/unknown settings safely fall back, and Off is never boosted. */
+    for(u32 row=1;row<=20;++row) {
+        u32 base=(row*256+10)/20;header[GRKIT_HOST_GRAIN/4]=strength_code(row);
+        for(u32 boost=0;boost<4;++boost) {
+            header[GRKIT_HOST_GRAIN_BOOST/4]=boost;
+            assert(grain_amplitude_value(1)==(boost==1 ? (base*3+1)/2 : boost==2 ? base*2 : base));
+        }
+    }
+    header[GRKIT_HOST_GRAIN_BOOST/4]=2;header[GRKIT_HOST_GRAIN/4]=0;
+    assert(grain_amplitude_value(1)==256 && grain_amplitude_value(2)==128);
+    header[GRKIT_HOST_GRAIN_BOOST/4]=0;
     header[GRKIT_HOST_GRAIN/4]=0;
     assert(grain_amplitude_value(1)==256 && grain_amplitude_value(2)==128 && grain_amplitude_value(3)==64);
     header[GRKIT_HOST_GRAIN/4]=999;
@@ -357,6 +369,16 @@ int main(void)
     assert(grain_seed_value(100,200)==seed1);
     header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
     assert(grain_seed_value(101,200)!=seed1);
+    header[GRKIT_HOST_GRAIN_PATTERN/4]=1;
+    u32 seq=header[GRKIT_HOST_GRAIN_SEQUENCE/4];
+    assert(grain_seed_value(1,2)==0x534f4654U && grain_seed_value(500,600)==0x534f4654U);
+    assert(header[GRKIT_HOST_GRAIN_SEQUENCE/4]==seq);
+    /* Switching back to default recovers the original seed formula exactly. */
+    header[GRKIT_HOST_GRAIN_PATTERN/4]=0;header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
+    assert(grain_seed_value(100,200)==seed1);
+    header[GRKIT_HOST_GRAIN_PATTERN/4]=999;header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
+    assert(grain_seed_value(100,200)==seed1);
+
 #endif
     static const short identity[9] = {8192, 0, 0, 0, 8192, 0, 0, 0, 8192};
     /* Native records and GRFX0001 records keep the native matrix bits. */

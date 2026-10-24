@@ -185,8 +185,10 @@ fields!(HEADER_FIELDS {
     HOST_SATURATION_UPPER = 304, 4;
     /// Split-tone strength: zero legacy, 1..21 means Off..100%.
     HOST_SPLIT_STRENGTH = 308, 4;
-    /// Keep the following native processing records aligned to 16 bytes.
-    HOST_CONTROL_RESERVED = 312, 8;
+    /// GR III/IIIx optional grain amplitude multiplier: 0 Default, 1 1.5x, 2 2x.
+    HOST_GRAIN_BOOST = 312, 4;
+    /// GR III/IIIx seed mode: 0 existing moment-derived seed, 1 fixed seed.
+    HOST_GRAIN_PATTERN = 316, 4;
 });
 
 pub const RECORD_SIZE: usize = 0x740;

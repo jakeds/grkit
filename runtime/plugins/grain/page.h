@@ -22,14 +22,33 @@ static u32 grain_level(volatile u32 *h) {
     u32 row; for(row=0;row<GRAIN_LEVEL_COUNT;++row) if(grain_code(row)==h[GRKIT_HOST_GRAIN/4]) return row;
     return 0;
 }
-static const u16 *grain_title(volatile u32 *h) { return text(h,TEXT_GRAIN); }
-static const u16 *grain_summary(volatile u32 *h) { return text(h,GRAIN_SUMMARY_TEXT+grain_level(h)); }
-static u32 grain_rows(volatile u32 *h) { (void)h; return GRAIN_LEVEL_COUNT; }
-static const u16 *grain_label(volatile u32 *h,u32 row) { return text(h,row ? GRAIN_LABEL_TEXT+row-1 : TEXT_OFF); }
-static u32 grain_icon(volatile u32 *h,u32 row) {
-    return h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT || row ? GRKIT_ICON_TILE(0) : GRKIT_ICON_OFF;
+/* Shared navigation scratch is reset when Grain opens. Stage 5..7 are
+   Strength / Boost / Pattern; zero is the Grain directory. */
+static u32 grain_stage(volatile u32 *h) { u32 v=h[GRKIT_HOST_COLOUR_MENU/4];return v>=5 && v<=7 ? v : 0; }
+static u32 grain_options(void) {
+#ifdef GRKIT_TARGET_GR3_210
+    return 3;
+#else
+    return 1; /* No unverified gain or seed hooks on GR IV. */
+#endif
 }
-static u32 grain_checked(volatile u32 *h,u32 row) { return row==grain_level(h); }
-static void grain_apply(volatile u32 *h,u32 row) { h[GRKIT_HOST_GRAIN/4]=grain_code(row); }
+static u32 grain_boost(volatile u32 *h) { u32 v=h[GRKIT_HOST_GRAIN_BOOST/4];return v<=2 ? v : 0; }
+static u32 grain_pattern(volatile u32 *h) { return h[GRKIT_HOST_GRAIN_PATTERN/4]==1; }
+static u32 grain_value(volatile u32 *h) { u32 s=grain_stage(h);return s==5 ? grain_level(h) : s==6 ? grain_boost(h) : s==7 ? grain_pattern(h) : 0; }
+static const u16 *grain_title(volatile u32 *h) { u32 s=grain_stage(h);return text(h,s ? TEXT_GRAIN_MENU+s-5 : TEXT_GRAIN); }
+static const u16 *grain_summary(volatile u32 *h) { return text(h,GRAIN_SUMMARY_TEXT+grain_level(h)); }
+static u32 grain_rows(volatile u32 *h) { u32 s=grain_stage(h);return s==5 ? GRAIN_LEVEL_COUNT : s==6 ? 3 : s==7 ? 2 : grain_options(); }
+static const u16 *grain_label(volatile u32 *h,u32 row) { u32 s=grain_stage(h);return text(h,s==5 ? (row ? GRAIN_LABEL_TEXT+row-1 : TEXT_OFF) : s==6 ? TEXT_GRAIN_BOOST+row : s==7 ? TEXT_GRAIN_PATTERN+row : TEXT_GRAIN_MENU+row); }
+static u32 grain_icon(volatile u32 *h,u32 row) { u32 s=grain_stage(h);return s==5 && !row ? GRKIT_ICON_OFF : GRKIT_ICON_TILE(0); }
+static u32 grain_checked(volatile u32 *h,u32 row) { return grain_stage(h) && row==grain_value(h); }
+static void grain_apply(volatile u32 *h,u32 row) {
+    u32 s=grain_stage(h);
+    if(!s) {if(row<grain_options()) {h[GRKIT_HOST_COLOUR_MENU/4]=row+5;h[GRKIT_HOST_MENU_CURSOR/4]=grain_value(h);}return;}
+    if(s==5 && row<GRAIN_LEVEL_COUNT) h[GRKIT_HOST_GRAIN/4]=grain_code(row);
+#ifdef GRKIT_TARGET_GR3_210
+    else if(s==6 && row<3) h[GRKIT_HOST_GRAIN_BOOST/4]=row;
+    else if(s==7 && row<2) h[GRKIT_HOST_GRAIN_PATTERN/4]=row;
+#endif
+}
 #define GRAIN_PAGE {grain_title,grain_summary,grain_rows,grain_label,grain_icon, \
-    grain_checked,grain_apply,grain_level,0,0,GRAIN_TILES}
+    grain_checked,grain_apply,grain_value,0,0,GRAIN_TILES}

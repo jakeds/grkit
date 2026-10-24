@@ -291,6 +291,21 @@ pub const RUNS: &[Run] = &[
         8,
         "Off followed by each editing range.",
     ),
+    run(
+        "GRAIN_MENU",
+        3,
+        "Strength, optional amplitude boost and seed pattern.",
+    ),
+    run(
+        "GRAIN_BOOST",
+        3,
+        "Default path or experimental amplitude multipliers.",
+    ),
+    run(
+        "GRAIN_PATTERN",
+        2,
+        "Existing moment seed or fixed generator seed.",
+    ),
 ];
 
 /// The first string ID of each run, in table order.
@@ -321,6 +336,9 @@ fn run_strings(w: &Words, name: &str, version: &str) -> Vec<String> {
     };
     let words = |values: &[&str]| values.iter().map(|value| value.to_string()).collect();
     match name {
+        "GRAIN_MENU" => words(&["Strength", "Boost", "Pattern"]),
+        "GRAIN_BOOST" => words(&["Default", "1.5x", "2x"]),
+        "GRAIN_PATTERN" => words(&["Moment", "Fixed seed"]),
         "IMAGE_CONTROL" => words(&[w.image_control]),
         "FRAMING" => words(&[w.framing]),
         "CROP_NAME" => words(&[

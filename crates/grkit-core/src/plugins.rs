@@ -16,9 +16,9 @@ use std::fmt::Write;
 use crate::{
     abi::{
         HOST_BLACK_FLOOR, HOST_BLOOM, HOST_COLOUR_BRIGHTNESS, HOST_COLOUR_HUE, HOST_COLOUR_RANGE,
-        HOST_COLOUR_SATURATION, HOST_FRAME_RATIO, HOST_GRAIN, HOST_GUIDE, HOST_HALATION,
-        HOST_HIGHLIGHT_ROLLOFF, HOST_SATURATION_UPPER, HOST_SHORTCUT, HOST_SPLIT_STRENGTH,
-        HOST_SPLIT_TONE, HOST_STAMP, HOST_STAMP_LOOK,
+        HOST_COLOUR_SATURATION, HOST_FRAME_RATIO, HOST_GRAIN, HOST_GRAIN_BOOST, HOST_GRAIN_PATTERN,
+        HOST_GUIDE, HOST_HALATION, HOST_HIGHLIGHT_ROLLOFF, HOST_SATURATION_UPPER, HOST_SHORTCUT,
+        HOST_SPLIT_STRENGTH, HOST_SPLIT_TONE, HOST_STAMP, HOST_STAMP_LOOK,
     },
     artwork, camera,
 };
@@ -264,11 +264,23 @@ pub const PLUGINS: [Plugin; 15] = [
         id: "grain",
         points: &[Point::MenuPage, Point::PipelineGrain],
         needs_effects: false,
-        state: &[StateKey {
-            name: "level",
-            word: Some(HOST_GRAIN),
-            max: 52,
-        }],
+        state: &[
+            StateKey {
+                name: "level",
+                word: Some(HOST_GRAIN),
+                max: 52,
+            },
+            StateKey {
+                name: "boost",
+                word: Some(HOST_GRAIN_BOOST),
+                max: 2,
+            },
+            StateKey {
+                name: "pattern",
+                word: Some(HOST_GRAIN_PATTERN),
+                max: 1,
+            },
+        ],
         tiles: 1,
         artwork: || artwork::soft_tiles("grain"),
         handlers: None,

@@ -99,7 +99,7 @@ static u32 parameters_row(volatile u32 *h) {
     module=&modules[h[GRKIT_HOST_MODULE/4]];return h[GRKIT_HOST_MENU_CURSOR/4]<module->rows(h) && module->parameters && module->parameters(h);
 }
 static void menu_open(volatile u32 *h,u32 module) {
-    if(module==PLUGIN_COLOUR_RANGE || module==PLUGIN_DATE_STAMP || module==PLUGIN_SPLIT_TONING) h[GRKIT_HOST_COLOUR_MENU/4]=0;
+    if(module==PLUGIN_COLOUR_RANGE || module==PLUGIN_DATE_STAMP || module==PLUGIN_SPLIT_TONING || module==PLUGIN_GRAIN) h[GRKIT_HOST_COLOUR_MENU/4]=0;
     h[GRKIT_HOST_MODULE/4]=module;h[GRKIT_HOST_MENU_LEVEL/4]=MENU_MODULE;
     h[GRKIT_HOST_MENU_CURSOR/4]=modules[module].committed(h);
 }
@@ -141,6 +141,7 @@ static u32 menu_right(volatile u32 *h) {
     if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) {
         if((!modules[module].rows(h) && !(module>=GROUP_FRAME && module<=GROUP_TEXTURE))) return 0;
     } else if(module==PLUGIN_DATE_STAMP && !stamp_stage(h) && row<2) { /* Format or Appearance. */ }
+    else if(module==PLUGIN_GRAIN && !grain_stage(h) && row<grain_options()) { }
     else if(module==PLUGIN_SPLIT_TONING && !split_stage(h) && row<2) { }
     else if(module==PLUGIN_COLOUR_RANGE && row<modules[module].rows(h)) { /* Range or parameter. */ }
     else return 0;
@@ -154,6 +155,7 @@ static u32 menu_back(volatile u32 *h) {
         h[GRKIT_HOST_MENU_SECTION/4]=0;h[GRKIT_HOST_MENU_CURSOR/4]=root_row(h,GROUP_FRAME+section-1);return 1;
     }
     module=h[GRKIT_HOST_MODULE/4];
+    if(module==PLUGIN_GRAIN && grain_stage(h)) {h[GRKIT_HOST_MENU_CURSOR/4]=grain_stage(h)-5;h[GRKIT_HOST_COLOUR_MENU/4]=0;return 1;}
     if(module==PLUGIN_SPLIT_TONING && split_stage(h)) {h[GRKIT_HOST_MENU_CURSOR/4]=split_stage(h)-3;h[GRKIT_HOST_COLOUR_MENU/4]=0;return 1;}
     if(module==PLUGIN_DATE_STAMP && stamp_stage(h)) {h[GRKIT_HOST_MENU_CURSOR/4]=stamp_stage(h)-1;h[GRKIT_HOST_COLOUR_MENU/4]=0;return 1;}
     if(h[GRKIT_HOST_COLOUR_MENU/4]) {
@@ -189,6 +191,7 @@ static const u16 *menu_heading(volatile u32 *h) {
         at=append_text(out,0,plugins);at=path_separator(out,at);
         append_text(out,at,text(h,TEXT_MENU_GROUP+section-1));return out;
     }
+    if(module==PLUGIN_GRAIN && grain_stage(h)) {at=append_text(out,0,text(h,TEXT_GRAIN));at=path_separator(out,at);append_text(out,at,grain_title(h));return out;}
     if(module==PLUGIN_SPLIT_TONING && split_stage(h)) {at=append_text(out,0,text(h,TEXT_SPLIT_TONING));at=path_separator(out,at);append_text(out,at,split_toning_title(h));return out;}
     if(module==PLUGIN_DATE_STAMP && stamp_stage(h)) {at=append_text(out,0,text(h,TEXT_DATE_STAMP));at=path_separator(out,at);append_text(out,at,stamp_title(h));return out;}
     if(h[GRKIT_HOST_COLOUR_MENU/4] && (module==PLUGIN_COLOUR_RANGE || module==PLUGIN_COLOUR_SATURATION || module==PLUGIN_COLOUR_HUE || module==PLUGIN_COLOUR_BRIGHTNESS)) {
@@ -202,6 +205,7 @@ static const u16 *menu_heading(volatile u32 *h) {
     append_text(out,at,control_name(h,module));return out;
 }
 static const u16 *control_summary(volatile u32 *h,u32 module) {
+    if(module==PLUGIN_GRAIN) return grain_summary(h);
     if(module==PLUGIN_SPLIT_TONING) {
         u32 preset=split_preset(h[GRKIT_HOST_SPLIT_TONE/4]);u16 *out=menu_buffer(h,1);
         u32 at=append_text(out,0,text(h,TEXT_SPLIT_PRESET+split_menu_row(h)));
@@ -221,12 +225,21 @@ static const u16 *control_summary(volatile u32 *h,u32 module) {
 static const u16 *menu_detail(volatile u32 *h) {
     u32 module=current_index(h),cursor=h[GRKIT_HOST_MENU_CURSOR/4];
     if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) return module<PLUGIN_COUNT ? control_summary(h,module) : modules[module].summary(h);
+    if(module==PLUGIN_GRAIN && !grain_stage(h) && cursor<grain_options()) {
+        static const u16 colon[]={':',' ',0};u16 *out=menu_buffer(h,1);
+        u32 at=append_text(out,0,text(h,TEXT_GRAIN_MENU+cursor));at=append_text(out,at,colon);
+        u32 level=grain_level(h);
+        const u16 *value=cursor==0 ? text(h,level ? GRAIN_LABEL_TEXT+level-1 : TEXT_OFF) : text(h,cursor==1 ? TEXT_GRAIN_BOOST+grain_boost(h) : TEXT_GRAIN_PATTERN+grain_pattern(h));
+        append_text(out,at,value);return out;
+    }
     if(module==PLUGIN_COLOUR_RANGE && h[GRKIT_HOST_COLOUR_MENU/4] ) return control_summary(h,colour_child(h,cursor));
     return modules[module].label(h,cursor);
 }
 static u32 menu_row_icon(volatile u32 *h,u32 row) {
     u32 owner=h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? root_module(h,row) : h[GRKIT_HOST_MODULE/4];
     if(owner==ABOUT_MODULE) return GRKIT_ICON_GRKIT;
+    if(owner==PLUGIN_GRAIN && h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && (grain_stage(h)==7 || (!grain_stage(h) && row==2))) return module_icon(PLUGIN_IMAGE_CONTROL,GRKIT_ICON_TILE(3));
+    if(owner==PLUGIN_GRAIN && h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && ((!grain_stage(h) && row==0) || (grain_stage(h)==5 && row))) return GRKIT_ICON_GRKIT;
     if(owner==PLUGIN_SOFT_SHORTCUT) return FN_GUIDE_ICON;
     if(owner==PLUGIN_SPLIT_TONING && h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && (split_stage(h)==4 || (!split_stage(h) && row==1))) return GRKIT_ICON_GRKIT;
     /* Category symbols are separate from every child control. */

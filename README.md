@@ -2,6 +2,8 @@
 
 ## Soft edition — experimental Ricoh GR builder
 
+Soft.15 adds III/IIIx Grain → Strength / Boost / Pattern. Boost is Default, 1.5x or 2x; Pattern is Moment or Fixed seed. Defaults preserve the prior amplitude and moment-seed behaviour. Off bypasses overrides; invalid saved values fall back to defaults. Fixed uses the same seed per native generator call and does not promise identical final JPEGs across different scenes or processing. GR IV keeps native strength controls; unverified overrides are not offered. Defaults are verified against Soft.14 native noise output under ARM emulation; physical camera testing remains outstanding.
+
 [Open the Soft builder](https://soft-gr.jakeds372351.chatgpt.site) · [Soft source branch](https://github.com/jakeds/grkit/tree/jake/gr3x-seeded-grain)
 
 Soft.14 recalibrates fine Black lift to a 48/255 maximum floor, fading smoothly to neutral by 128/255. Split toning has four times the former endpoint range and symmetric rounding; Warm Cream at 5% now produces a nonzero tint. Existing percentage settings become stronger; Off and legacy fixed-strength codes retain their old responses. Grain is unchanged.
