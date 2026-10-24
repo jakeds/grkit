@@ -22,9 +22,9 @@ const CONTROL_COPY: Partial<Record<ModuleKey, { name: string; description: strin
   imageControl: { name: 'Film looks', description: 'Your selected looks, with live view.' },
   framing: { name: 'Crop', description: '6x7, 5:4, FP100C, 4:3 and 16:9.' },
   guides: { name: 'Guides', description: 'Thirds, centre, golden ratio and diagonals.' },
-  blackFloor: { name: 'Black lift', description: 'Lift deep blacks to charcoal.' },
+  blackFloor: { name: 'Black lift', description: 'Lift deep blacks: subtle to a strong matte finish.' },
   highlightRolloff: { name: 'Highlight roll-off', description: 'A gentler finish to bright tones.' },
-  splitToning: { name: 'Split toning', description: 'Warm cream, cocoa, amber and more.' },
+  splitToning: { name: 'Split toning', description: 'Warm cream, cocoa and amber, from subtle to pronounced.' },
   colourRange: { name: 'Selective colour', description: 'Edit seven colour ranges independently.' },
   colourSaturation: { name: 'Saturation', description: 'Mute or enrich each colour.' },
   colourHue: { name: 'Hue', description: 'Shift each colour’s tone.' },
@@ -256,7 +256,7 @@ export function App() {
           <details className="help-panel">
             <summary>Camera differences and experimental features</summary>
             <p>III and IIIx share a runtime; HDF models use their base camera’s package. GR IV uses a separate runtime. Its grain uses native strengths and its extra crop is XPan. GR IV Monochrome excludes colour film looks.</p>
-            <p>New crop modes, III-series grain seeding and JPEG effects have software checks but still need physical camera testing. Bloom and halation may increase saving time. This is an SD-card runtime, not a replacement firmware image.</p>
+            <p>Black lift and split toning have a stronger range in this update; saved percentages will look stronger. Grain keeps its existing Ricoh amplitude scale. New crop modes, III-series grain seeding and JPEG effects have software checks but still need physical camera testing. Bloom and halation may increase saving time. This is an SD-card runtime, not a replacement firmware image.</p>
           </details>
           </div>
         </section>

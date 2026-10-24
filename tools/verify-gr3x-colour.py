@@ -65,6 +65,27 @@ for level in range(13):
         out, c = run('black_floor_encode', y, b'\x80\x80', {256: level})
         assert out == bytes([expected])*256 and c == b'\x80\x80'*128
         cases += 1
+# Modern percentage curves must reach a visibly matte endpoint without
+# changing neutral midtones, on the actual compiled ARM encoder.
+for step in range(1,21):
+    for y in [0,16,48,96,128,200,255]:
+        expected=y if y>=128 else y+(step*48*(128-y)**2+163840)//327680
+        out,c=run('black_floor_encode',y,b'\x80\x80',{256:32+step})
+        assert out==bytes([expected])*256 and c==b'\x80\x80'*128
+        cases+=1
+# Warm Cream must produce a tint at the first step, preserve middle neutrals,
+# and produce strong endpoints at maximum, in both chroma layouts.
+for half in [0,1]:
+    for step in range(1,21):
+        for y in [0,56,128,208,255]:
+            sw=(112-y)**2*256//12544 if y<112 else 0
+            hw=(y-144)**2*256//12321 if y>144 else 0
+            def nearest(value):
+                return (1 if value>=0 else -1)*((abs(value)+12800)//25600)
+            expected=bytes([128+nearest((-4*sw-6*hw)*step*5*4),128+nearest((4*sw+2*hw)*step*5*4)])
+            out,c=run('split_toning_encode',y,b'\x80\x80',{260:13,308:step+1},half)
+            assert out==bytes([y])*256 and c==expected*(64 if half else 128)
+            cases+=1
 for half in [0, 1]:
     for y, expected in [(0, (134,124)), (128, (128,128)), (255, (124,134))]:
         out, c = run('split_toning_encode', y, b'\x80\x80', {260:1}, half)

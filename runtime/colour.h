@@ -8,6 +8,12 @@ static int colour_divide(int value,u32 divisor) {
     return value<0 ? -(int)divide((u32)-value,divisor) : (int)divide((u32)value,divisor);
 }
 static u32 black_floor_value(u32 y,u32 level) {
+    /* Fine controls: 100% reaches Y=48 with a smooth taper to Y=128.
+       Legacy codes retain their previous response until edited. */
+    if(level>=33 && level<=52) {
+        if(y>=128) return y;
+        return y+divide((level-32)*48*(128-y)*(128-y)+163840,327680);
+    }
     level=strength_q(level);
     if(!level || y>=96) return y;
     return y+divide(level*(96-y)*(96-y)+1179648,2359296);
@@ -41,8 +47,12 @@ static void split_toning_apply_picture(volatile u32 *h,PictureSet *set) {
         u32 sw=i<112 ? divide((112-i)*(112-i)*256,12544) : 0;
         u32 hw=i>144 ? divide((i-144)*(i-144)*256,12321) : 0;
         if(h[GRKIT_HOST_SPLIT_STRENGTH/4] || preset>12) {
-            cb[i]=(s16)((full[family-1][0]*(int)sw+full[family-1][2]*(int)hw)*(int)percent/25600);
-            cr[i]=(s16)((full[family-1][1]*(int)sw+full[family-1][3]*(int)hw)*(int)percent/25600);
+            /* Four times the earlier endpoint range. Round signed values
+               symmetrically so low warm strengths survive 8-bit quantisation. */
+            int cbq=(full[family-1][0]*(int)sw+full[family-1][2]*(int)hw)*(int)percent*4;
+            int crq=(full[family-1][1]*(int)sw+full[family-1][3]*(int)hw)*(int)percent*4;
+            cb[i]=(s16)(cbq<0 ? -colour_divide(-cbq+12800,25600) : colour_divide(cbq+12800,25600));
+            cr[i]=(s16)(crq<0 ? -colour_divide(-crq+12800,25600) : colour_divide(crq+12800,25600));
         } else {
             cb[i]=(s16)((tint[preset-1][0]*(int)sw+tint[preset-1][2]*(int)hw)/256);
             cr[i]=(s16)((tint[preset-1][1]*(int)sw+tint[preset-1][3]*(int)hw)/256);

@@ -4,6 +4,8 @@
 
 [Open the Soft builder](https://soft-gr.jakeds372351.chatgpt.site) · [Soft source branch](https://github.com/jakeds/grkit/tree/jake/gr3x-seeded-grain)
 
+Soft.14 recalibrates fine Black lift to a 48/255 maximum floor, fading smoothly to neutral by 128/255. Split toning has four times the former endpoint range and symmetric rounding; Warm Cream at 5% now produces a nonzero tint. Existing percentage settings become stronger; Off and legacy fixed-strength codes retain their old responses. Grain is unchanged.
+
 Choose your camera, film looks and controls, then download an SD-card package. The photo previewer has been removed. Six everyday looks are selected by default; the rest are optional. New effects start off or neutral on a fresh setup; existing camera settings are retained.
 
 | Camera, including its HDF model | Required firmware | Runtime |

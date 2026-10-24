@@ -234,14 +234,16 @@ static void test_colour_controls(void) {
             if(y<=176 || !level) assert(highlight_rolloff_sample(y,level)==y);
         }
     }
-    /* Fine steps are monotonic, bounded, and retain legacy curve values. */
+    /* Fine steps reach a visible 48/255 floor, taper to neutral at 128,
+       and preserve monotonic tone order at every strength. */
     for(u32 row=0;row<21;++row) {
         u32 code=strength_code(row);
-        assert(black_floor_value(0,code)==(12*row+10)/20);
+        assert(black_floor_value(0,code)==(48*row+10)/20);
         assert(highlight_rolloff_sample(255,code)==255-(24*row+10)/20);
         for(u32 y=1;y<256;++y) {
             assert(black_floor_value(y,code)>=black_floor_value(y-1,code));
             assert(highlight_rolloff_sample(y,code)>=highlight_rolloff_sample(y-1,code));
+            if(y>=128 || !row) assert(black_floor_value(y,code)==y);
             if(row) {
                 assert(black_floor_value(y,code)>=black_floor_value(y,strength_code(row-1)));
                 assert(highlight_rolloff_sample(y,code)<=highlight_rolloff_sample(y,strength_code(row-1)));
@@ -256,7 +258,8 @@ static void test_colour_controls(void) {
         header[GRKIT_HOST_SPLIT_TONE/4]=preset;header[GRKIT_HOST_SPLIT_STRENGTH/4]=step+1;
         memset(PICTURE_MAP(p.y),0,80*64);memset(PICTURE_MAP(p.c),128,80*64);
         split_toning_apply_picture(header,&set);
-        assert(BYTE(p.c,0)<=128 && BYTE(p.c,1)>=128);
+        assert(BYTE(p.c,0)<128 && BYTE(p.c,1)>128);
+        if(preset==13 && step==20) assert(BYTE(p.c,0)==112 && BYTE(p.c,1)==144);
         memset(PICTURE_MAP(p.y),128,80*64);memset(PICTURE_MAP(p.c),128,80*64);
         split_toning_apply_picture(header,&set);assert(BYTE(p.c,0)==128 && BYTE(p.c,1)==128);
     }
