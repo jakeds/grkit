@@ -183,7 +183,7 @@ static void menu_row_fill(u32 slot,u32 row) {
         if(page<module_pages(h)) {
             const MenuPage *m=menu_page(h,page);
             label=m->title(h);
-            value=manage_off(h,module) ? on_off_text(h,1) : m->label(h,m->committed(h));
+            value=manage_off(h,module) ? on_off_text(h,1) : m==&soft_settings_module ? no_text : m->label(h,m->committed(h));
         }
         else { label=manage_name(h,module); value=on_off_text(h,manage_off(h,module)); }
     }

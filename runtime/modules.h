@@ -156,7 +156,7 @@ static const Setting choice_one[SETTING_ROWS]={
    same setting handles and text, so no second copy of a value can drift. */
 static u32 soft_stage(volatile u32 *h) {u32 n=h[GRKIT_HOST_SOFT_STAGE/4],rows=PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_SETTING_ROWS);return n<=rows?n:0;}
 static u32 soft_handle(volatile u32 *h) {return choice_row_handle(h,soft_stage(h)-1);}
-static const u16 *soft_title(volatile u32 *h) {u32 stage=soft_stage(h);return stage?choice_row_text(h,stage-1,ROW_LABEL,0):choice_title(h);}
+static const u16 *soft_title(volatile u32 *h) {u32 stage=h[GRKIT_HOST_MENU_CONTROLLER/4] && h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE ? soft_stage(h) : 0;return stage?choice_row_text(h,stage-1,ROW_LABEL,0):choice_title(h);}
 static u32 soft_rows(volatile u32 *h) {return soft_stage(h)?setting_rows(h,soft_handle(h)):PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_SETTING_ROWS);}
 static u32 soft_value(volatile u32 *h,u32 row) {return setting_row_value(h,soft_handle(h),row);}
 static const u16 *soft_label(volatile u32 *h,u32 row) {u32 stage=soft_stage(h);return stage?choice_row_text(h,stage-1,ROW_VALUES,soft_value(h,row)):choice_row_text(h,row,ROW_LABEL,0);}
@@ -164,7 +164,9 @@ static u32 soft_icon(volatile u32 *h,u32 row) {u32 stage=soft_stage(h);if(h[GRKI
 static u32 soft_checked(volatile u32 *h,u32 row) {return soft_stage(h)&&soft_value(h,row)==setting_value(h,soft_handle(h));}
 static u32 soft_committed(volatile u32 *h) {if(!soft_stage(h))return 0;u32 n=soft_rows(h),value=setting_value(h,soft_handle(h));for(u32 i=0;i<n;++i)if(soft_value(h,i)==value)return i;return 0;}
 static void soft_apply(volatile u32 *h,u32 row) {if(!soft_stage(h)){if(row<soft_rows(h)){h[GRKIT_HOST_SOFT_STAGE/4]=row+1;h[GRKIT_HOST_MENU_CURSOR/4]=soft_committed(h);}return;}if(row<soft_rows(h))setting_store(h,soft_handle(h),soft_value(h,row));}
-static const MenuPage soft_settings_module={soft_title,choice_summary,soft_rows,soft_label,soft_icon,
+/* A multi-control directory has no single Off value: for example Halation
+   may be on while Bloom is off. Keep its parent label neutral. */
+static const MenuPage soft_settings_module={soft_title,choice_title,soft_rows,soft_label,soft_icon,
     soft_checked,soft_apply,soft_committed,0,0,choice_settings};
 
 static const MenuPage choice_settings_module={choice_title,choice_summary,choice_rows,choice_label,choice_icon,

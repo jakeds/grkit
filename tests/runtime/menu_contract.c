@@ -2214,6 +2214,8 @@ static void soft_grain_directory_uses_all_four_settings(void) {
  u32 icons[4];for(u32 r=0;r<4;++r){icons[r]=CURRENT_ICON(r);for(u32 j=0;j<r;++j)assert(icons[j]!=icons[r]);}
  frame_preview_set(test_header,0,0);assert(!test_header[GRKIT_HOST_MODULE_PREVIEW/4]);
  test_header[GRKIT_HOST_MENU_CURSOR/4]=2;menu_confirm(test_header);assert(soft_stage(test_header)==3&&count(test_header)==3&&test_header[GRKIT_HOST_GRAIN_BOOST/4]==0);
+ test_header[GRKIT_HOST_MENU_CONTROLLER/4]=0x1000;assert(same(current_module(test_header)->title(test_header),"Boost"));
+ test_header[GRKIT_HOST_MENU_CONTROLLER/4]=0;assert(same(current_module(test_header)->title(test_header),"Grain"));
  test_header[GRKIT_HOST_MENU_CURSOR/4]=2;menu_confirm(test_header);assert(test_header[GRKIT_HOST_GRAIN_BOOST/4]==2&&test_header[GRKIT_HOST_GRAIN/4]==10&&test_header[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE);
  assert(menu_back(test_header)&&!soft_stage(test_header)&&test_header[GRKIT_HOST_MENU_CURSOR/4]==2);
  test_header[GRKIT_HOST_MENU_CURSOR/4]=3;menu_confirm(test_header);test_header[GRKIT_HOST_MENU_CURSOR/4]=1;menu_confirm(test_header);assert(test_header[GRKIT_HOST_GRAIN_PATTERN/4]==1);
