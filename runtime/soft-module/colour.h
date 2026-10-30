@@ -88,22 +88,29 @@ static void colour_table_extended(u8 *table,u32 saturation,u32 hue,u32 upper) {
     
     static const s16 cosine[9]={241,247,252,255,256,255,252,247,241};
     static const s16 sine[9]={-88,-66,-44,-22,0,22,44,66,88};
-    u32 cb,cr,range;
+    struct {int scale,cosine,sine;u32 range;} active[7];
+    u32 cb,cr,range,count=0;
+    /* Decode once per table, rather than 458752 times per photograph. */
+    for(range=0;range<7;++range) {
+        int s=colour_setting(saturation,upper,range,1),angle=colour_setting(hue,0,range,0);
+        if(!s && !angle) continue;
+        u32 t=(u32)(angle/5+4);
+        active[count].scale=256+(s<0 ? -((-s*256+50)/100) : (s*256+50)/100);
+        active[count].cosine=cosine[t];active[count].sine=sine[t];active[count++].range=range;
+    }
     for(cb=0;cb<256;++cb) for(cr=0;cr<256;++cr) {
         int u=(int)cb-128,v=(int)cr-128,du=0,dv=0;
         u32 weights=0,index=(cb*256+cr)*2;
-        for(range=0;range<7;++range) {
-            int s=colour_setting(saturation,upper,range,1),angle=colour_setting(hue,0,range,0);
-            u32 t=(u32)(angle/5+4),weight;int scale=256+(s<0 ? -((-s*256+50)/100) : (s*256+50)/100);
-            int along,cross,nu,nv;
-            if(!s && !angle) continue;
+        for(u32 k=0;k<count;++k) {
+            u32 weight;int scale=active[k].scale,cs=active[k].cosine,sn=active[k].sine;
+            int along,cross,nu,nv;range=active[k].range;
             along=u*colour_direction[range][0]+v*colour_direction[range][1];
             cross=u*colour_direction[range][1]-v*colour_direction[range][0];
             if(cross<0) cross=-cross;
             if(along<=0 || cross*8>=along*5) continue;
             weight=256-divide((u32)cross*2048,(u32)along*5);
-            nu=((u*cosine[t]-v*sine[t])*scale)/65536;
-            nv=((u*sine[t]+v*cosine[t])*scale)/65536;
+            nu=((u*cs-v*sn)*scale)/65536;
+            nv=((u*sn+v*cs)*scale)/65536;
             du+=(nu-u)*(int)weight; dv+=(nv-v)*(int)weight; weights+=weight;
         }
         if(weights<256) weights=256;
@@ -116,14 +123,18 @@ GRKIT_MAYBE_UNUSED static void colour_table(u8 *table,u32 saturation,u32 hue) { 
    Build and consume its 64 KiB lookup before reusing scratch for chroma. */
 static void colour_brightness_apply(PictureSet *set,u32 packed) {
     signed char *table=(signed char *)set->scratch;
-    u32 cb,cr,range,i,x,y;
+    u32 cb,cr,range,i,x,y,count=0;
+    int steps[7];u32 ranges[7];
+    for(range=0;range<7;++range) {
+        int step=colour_setting(packed,0,range,0);
+        if(step) {steps[count]=step;ranges[count++]=range;}
+    }
     for(cb=0;cb<256;++cb) for(cr=0;cr<256;++cr) {
         int u=(int)cb-128,v=(int)cr-128,delta=0;
         u32 weights=0;
-        for(range=0;range<7;++range) {
-            int step=colour_setting(packed,0,range,0);u32 weight;
+        for(u32 k=0;k<count;++k) {
+            int step=steps[k];u32 weight;range=ranges[k];
             int along,cross;
-            if(!step) continue;
             along=u*colour_direction[range][0]+v*colour_direction[range][1];
             cross=u*colour_direction[range][1]-v*colour_direction[range][0];
             if(cross<0) cross=-cross;
@@ -171,9 +182,18 @@ static void colour_range_apply_picture(volatile u32 *h,PictureSet *set) {
     u32 range=h[GRKIT_HOST_COLOUR_RANGE/4],i,x,y;
     u8 *table=set->scratch;
     _Static_assert(256*256*2<=GRKIT_PICTURE_MASKS,"Colour table scratch overflow");
-    if(!range || range>7 || (!saturation && !hue && !brightness) || set->mono) return;
-    if(brightness) colour_brightness_apply(set,brightness);
-    if(!saturation && !hue) return;
+    u32 chroma=0,light=0;
+    if(!range || range>7 || set->mono) return;
+    /* COLOUR_V2 is a format marker, not an adjustment. A neutral marker
+       previously ran a full brightness pass on saturation/hue-only edits,
+       and built the chroma table on brightness-only edits. Decode also
+       handles old values and rejects invalid codes exactly as before. */
+    for(u32 k=0;k<7;++k) {
+        chroma|=colour_setting(saturation,h[GRKIT_HOST_SATURATION_UPPER/4],k,1)!=0 || colour_setting(hue,0,k,0)!=0;
+        light|=colour_setting(brightness,0,k,0)!=0;
+    }
+    if(light) colour_brightness_apply(set,brightness);
+    if(!chroma) return;
     colour_table_extended(table,saturation,hue,h[GRKIT_HOST_SATURATION_UPPER/4]);
     for(i=0;i<set->count;++i) {
         const Plane *p=&set->planes[i];

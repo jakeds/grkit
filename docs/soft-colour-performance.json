@@ -1,0 +1,10 @@
+{
+  "cases": 98,
+  "saved_plane_output_identical": true,
+  "host_median_seconds": {
+    "before": 0.1266,
+    "after": 0.0478
+  },
+  "host_speedup": 2.65,
+  "camera_timing_measured": false
+}

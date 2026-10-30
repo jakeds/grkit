@@ -6,6 +6,7 @@ Soft.16 integrates upstream GRKit through `f300328` (2026-10-30). It keeps Soft'
 - Faster upstream loader: plans remain in RAM and the previous working core is tried first. Actual startup time needs a camera measurement.
 - III/IIIx Grain: Strength / Size / Boost / Pattern. Size defaults to **Default**, retaining Soft.15's native noise path. Auto / Small / Medium / Large opt into the new size generator. Boost Default and Pattern Moment retain the previous amplitude and seed behaviour; Fixed seed is opt-in.
 - GR IV offers Strength and Size; III-only seed controls are omitted. The public builder currently packages the rebuilt GR IV 1.11 / Monochrome 1.00 runtime. Newer upstream IV targets remain in source but aren't advertised by this builder until rebuilt against those official firmware inputs.
+- Colour module v2 skips neutral brightness/chroma passes and prepares only edited ranges. A host comparison covers 98 cases against Soft.16 with identical image-plane output; camera processing time has not been measured. Run `python3 tools/verify-soft-colour-optimisation.py` to reproduce.
 - Every new effect starts Off or Neutral. Existing Soft.15 settings have a one-time conversion of percentages, crop IDs, date appearances, split tones and packed colour edits.
 - [Builder](https://soft-gr.jakeds372351.chatgpt.site/) · [Source](https://github.com/jakeds/grkit/tree/jake/soft16-upstream-menu)
 

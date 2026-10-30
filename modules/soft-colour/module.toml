@@ -1,5 +1,5 @@
 id = "SOFTCOL"
-version = 1
+version = 2
 order = 90
 sources = ["soft.c"]
 tiles = ["tiles/soft-0.png", "tiles/soft-1.png", "tiles/soft-2.png", "tiles/soft-3.png", "tiles/soft-4.png"]
