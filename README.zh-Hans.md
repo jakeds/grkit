@@ -1,111 +1,93 @@
 # GRKit
 
-[English](README.md) | 简体中文 | [繁體中文](README.zh-Hant.md) | [日本語](README.ja.md)
+[English](README.md) | 简体中文 | [繁體中文](README.zh-Hant.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 [![Tests](https://github.com/ahonn/grkit/actions/workflows/tests.yml/badge.svg)](https://github.com/ahonn/grkit/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-GRKit 为 RICOH GR 相机增加胶片风格和拍摄辅助功能。它从存储卡加载，不改写相机固件。
+GRKit 给理光 GR III、GR IIIx 和 GR IV 加上胶片滤镜、XPan 等画幅、日期水印和颗粒，从存储卡运行，无需刷机。拔掉存储卡，相机就恢复原样。
 
-![ADJ 模式中的 GRKit 页面](https://github.com/ahonn/grkit/raw/main/resources/images/grkit-root.png)
+<p>
+  <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-root.zh-Hans.jpg" alt="ADJ 模式中的 GRKit 页面" width="49%">
+  <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-menu.zh-Hans.jpg" alt="MENU 自定义页中的 GRKit 小节" width="49%">
+</p>
 
 照片：nagi usano 拍摄的 [Snow in Akihabara](https://www.flickr.com/photos/cafetricot/51803682755/)，[CC BY 2.0](https://creativecommons.org/licenses/by/2.0/)。
 
 ## 功能
 
-GRKit 在 ADJ 模式中增加第 6 个功能 GRK，包含五个模块：
+拍摄时按下 ADJ 拨杆，选择第 6 项 GRK。
 
-- **影像控制（Image Control）**：16 种胶片风格，例如 Portra 400、Velvia 100 和 Tri-X 400。可以在实时显示中预览效果。
-- **画幅（Framing）**：拍摄 XPan（65:24）、16:9 或 4:3 照片。显示屏上照片以外的区域会变暗。
-- **辅助线（Guides）**：三分法、中心、黄金分割或对角线。
-- **加印日期（Date Stamp）**：在照片上加印橙色日期，效果类似胶片相机的数据后背。
-- **颗粒感（Grain）**：为照片添加胶片颗粒感，有弱、中、强三档。
+- **胶片风格**：Portra 400、Velvia 100、Tri-X 400 等，取景时实时预览。也可以在 [grkit.app](https://grkit.app) 导入自己的 `.cube` LUT 或 Lightroom 预设。风格由开源胶片 LUT 拟合而来，效果接近原 LUT，但不完全一样（[来源](effects/NOTICE.md)）。
+- **画幅**：XPan、2.35:1、16:9、4:3、5:4、7:6 和 1:1，取景时用遮罩或框线标出范围。
+- **辅助线**：三分法、中心、黄金分割和对角线。
+- **加印日期**：在照片上印日期，有经典、GR1s 点阵和 GR II 三种样式。
+- **颗粒感**：弱、中、强、特强四档，颗粒大小可选自动、小、中、大。
 
-最后一行显示 GRKit 的版本号。
-
-制作安装包时，你可以选择包含哪些模块。菜单只显示这些模块。
+开机后 GRKit 需要约 8 到 10 秒加载，GR IV 以及安装或更新后的第一次开机会更久。在此之前相机使用原本的设置。完整设置在 MENU 自定义页最后的 GRKit 小节。想自己写模块，见 [Writing a module](docs/modules.md)（英文）。
 
 ## 支持的机型
 
-| 机型 | 固件 | 状态 |
+| 机型 | 真机测试 | 已支持 |
 | --- | --- | --- |
-| RICOH GR III | 2.10 | 已经过真机测试 |
-| RICOH GR III HDF | 2.10 | 尚未经过真机测试 |
-| RICOH GR IIIx | 1.60 | 尚未经过真机测试 |
-| RICOH GR IIIx HDF | 1.60 | 尚未经过真机测试 |
-| RICOH GR IV、GR IV HDF | 1.11 | 实验性支持，尚未经过真机测试。画幅只提供 XPan。 |
+| GR III、GR III HDF | 2.10、2.20 | — |
+| GR IIIx、GR IIIx HDF | 1.60、1.70 | — |
+| GR IV、GR IV HDF | 1.11、1.20 | — |
+| GR IV Monochrome | 1.00 | 1.10 |
 
-HDF 机型运行基础机型的固件，使用同一个包。不支持其他机型和固件版本。你可以在相机菜单中查看固件版本。
+GR IV Monochrome 不含胶片风格。其他机型和固件版本暂不支持。如果 GRKit 在受支持的相机上无法加载，请看[固件导出指南](resources/DUMP.zh-Hans.md)。
 
 > [!WARNING]
-> GRKit 是实验性项目，使用风险由你自行承担。
-> GRKit 只在相机开机期间修改内存，关机后修改即失效。安装过程会打开相机的 SD 脚本设置，这个设置会一直保持打开。
-> 如果 GRKit 出错，相机可能在启动时停止响应。安装前请先阅读[恢复指南](resources/RECOVERY.zh-Hans.md)。
+> GRKit 仍是实验性项目，使用风险自负。
+> 安装时会打开相机的 SD 脚本设置，之后需要手动关闭。如果 GRKit 出错，相机可能卡在开机阶段，安装前请先读[恢复指南](resources/RECOVERY.zh-Hans.md)。
 
 ## 安装
 
-在 [grkit.app](https://grkit.app) 选择相机、模块和效果，然后下载 `GRKit.zip`。
+在 [grkit.app](https://grkit.app) 选好相机、模块和效果，然后任选一种方式：
 
-每个安装包都包含对应机型的安装指南，格式为 PDF，语言是下载时选择的语言。恢复指南在其末尾。源文件：
+- **直接写入 SD 卡**：在电脑上用 Chrome 或 Edge 操作。以后更新、卸载或增删模块和效果，也都在网站上完成。
+- **下载 GRKit.zip**：按包里的 PDF 指南操作（[GR III 和 GR IIIx](resources/INSTALLATION.zh-Hans.md)、[GR IV](resources/INSTALLATION-GR4.zh-Hans.md)）。
 
-- [GR III、GR IIIx 及其 HDF 机型](resources/INSTALLATION.zh-Hans.md)
-- [GR IV 和 GR IV HDF](resources/INSTALLATION-GR4.zh-Hans.md)
+只有第一次需要按住 MENU 开机。用 ZIP 更新时，替换卡里的 `SCRIPT` 文件夹即可，设置保存在 `GRKIT` 里。格式化存储卡会删掉 GRKit，格式化前先把 `GRKIT` 备份到电脑。
 
-要移除 GRKit，请先关闭相机，再删除存储卡中的 `SCRIPT` 文件夹。
+GRK 没有出现时，先看 [grkit.app](https://grkit.app) 上的常见问题。还是不行的话，提交[设备报告](https://github.com/ahonn/grkit/issues/new?template=device-report.yml)，附上 `GRKIT/REPORT.TXT`、`GRKIT/BOOT.TXT` 和 `SCRIPT/GRKIT/INSTALL.ERR`（如果有）。
 
 ## 从源码构建
 
-你需要 Rust 1.92 或更高版本、支持 ARM 的 Clang 和 LLD，以及 Ricoh 官方固件文件。仓库中不包含固件。
+需要 Rust 1.92 及以上、支持 ARM 的 Clang 和 LLD，以及理光官方固件文件（仓库不包含固件）。
 
 ```sh
 cargo install --path crates/grkit-cli --locked
 grkit effects build --source effects --out build/effects
 grkit build --target gr3-2.10 --firmware firmware/fwdc239b.bin --out build/runtime
+for module in modules/*/; do grkit module build --dir "$module" --out "build/modules/$(basename "$module").GRM"; done
 sh .github/scripts/install-guide-tools.sh build/guide-tools
 sh .github/scripts/build-guides.sh grkit build/guide-tools build/guides
-grkit package --build build/runtime --effects build/effects --guide build/guides/gr3/en.pdf --out dist/GRKit.zip
+grkit package --build build/runtime --effects build/effects $(for m in build/modules/*.GRM; do printf -- '--module %s ' "$m"; done) \
+  --guide build/guides/gr3/en.pdf --out dist/GRKit.zip
 grkit verify dist/GRKit.zip
 ```
 
-- 指南：`install-guide-tools.sh` 下载 Typst 和 Noto Sans SC、TC、JP 字体，并校验 SHA-256，支持 Linux x86_64 和 macOS arm64。`build-guides.sh` 生成 `build/guides/<机型>/<语言>.pdf`。
-- GR IIIx：用 `--camera gr3x` 和 `--guide build/guides/gr3x/en.pdf` 打包。它和 GR III 使用同一个运行时。
-- HDF 机型：按基础机型打包，例如 GR III HDF 用 `--camera gr3`。
-- GR IV：用 `fwdc248b.bin` 和 `--target gr4-1.11` 构建，再用 `--camera gr4` 和 `--guide build/guides/gr4/en.pdf` 打包。
-- 减少插件：用 `--plugins` 列出要安装的插件，例如 `--plugins framing,guides`。安装器不会为其他插件修改固件。不加 `--effects` 时，安装包中没有 Image Control。
-- 指南语言：加 `--language zh-Hans`、`--language zh-Hant` 或 `--language ja`，并给出该语言的指南，例如 `build/guides/gr3/zh-Hans.pdf`。
-
-## 仓库结构
-
-| 路径 | 内容 |
-| --- | --- |
-| `crates/grkit-core` | 效果格式和安装包规则，不含平台 I/O |
-| `crates/grkit-build` | 从固件文件构建运行时 |
-| `crates/grkit-cli` | `grkit` 命令 |
-| `crates/grkit-wasm` | 在浏览器中组装安装包 |
-| `runtime/` | 在相机上运行的代码 |
-| `effects/` | Image Control 效果的源文件 |
-| `web/` | 在浏览器中制作安装包的网站 |
-| `resources/` | 安装指南和恢复指南 |
-| `docs/` | 架构和发布流程 |
+其他机型、部分模块或其他语言的指南，见 [Build packages](CONTRIBUTING.md#build-packages)（英文）。
 
 ## 参与贡献
 
-环境配置、测试和提交规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-如果你在真机上测试了 GRKit，请提交一个 Device report issue，说明结果是通过还是失败。GR IIIx、HDF 机型和 GR IV 的报告最有帮助。
+见 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）。不管能不能用，都欢迎提交设备报告，尤其是还没经过真机测试的固件。遇到问题、有功能想法或疑问，可以填写[反馈表单](https://tally.so/r/Z9jRgB)，也欢迎[请我喝杯咖啡](https://buymeacoffee.com/yuexunjiang)支持这个项目。
 
 ## 文档（英文）
 
 - [架构](docs/architecture.md)
+- [编写模块](docs/modules.md)和[模块参考](docs/module-reference.md)
 - [发布流程](docs/releasing.md)
 - [效果](effects/README.md)
 - [网站](web/README.md)
 
 ## 许可
 
-代码采用 [MIT 许可证](LICENSE)。每个安装包都包含 `LICENSES.md`，列出包内文件的许可。
+代码采用 [MIT 许可证](LICENSE)。每个安装包都带有 `LICENSES.md`，列出包内文件的许可。
 
-- 效果采用 CC BY-SA 4.0 或 MIT 许可。[effects/NOTICE.md](effects/NOTICE.md) 列出每个效果的许可。
-- 图标文字使用 [Inter](https://github.com/rsms/inter) 字体，采用 [SIL Open Font License 1.1](crates/grkit-core/assets/Inter-LICENSE.txt)。
+- 效果采用 CC BY-SA 4.0 或 MIT 许可，详见 [effects/NOTICE.md](effects/NOTICE.md)。
+- 菜单和取景画面的文字使用 [Roboto Condensed](https://github.com/googlefonts/roboto-classic) 字体，采用 [SIL Open Font License 1.1](crates/grkit-core/assets/RobotoCondensed-LICENSE.txt)。
 - 效果拟合方法移植自 [gr3-film-mods](https://github.com/idontknownihil/gr3-film-mods)，采用 [MIT 许可证](crates/grkit-core/GR3_FILM_MODS_LICENSE.txt)。
 
-RICOH 和 GR 是 Ricoh Company, Ltd. 的商标。胶片名称是其所有者的商标。GRKit 是独立项目，与 Ricoh 及任何胶片厂商无关，也未获得它们的认可或支持。
+RICOH 和 GR 是 Ricoh Company, Ltd. 的商标，胶片名称是各自所有者的商标。GRKit 是独立项目，与理光及任何胶片厂商均无关联。

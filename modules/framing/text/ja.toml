@@ -1,0 +1,16 @@
+title = "フレーミング"
+rows = ["Native 3:2", "XPan", "16:9", "4:3", "2.35:1", "1:1", "5:4", "6x7 (7:6)", "FP100C"]
+# The value in the root row, which has less room than a row.
+
+summaries = ["Off", "XPan", "16:9", "4:3", "2.35:1", "1:1", "5:4", "7:6", "FP100C"]
+
+[settings."CORE.ASPECT"]
+label = "アスペクト比"
+
+[settings.MASK]
+label = "マスク"
+values = ["ダーク", "ブラック", "枠線"]
+
+[settings.LABEL]
+label = "比率表示"
+values = ["Off", "On"]

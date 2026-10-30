@@ -1,0 +1,148 @@
+id = "SOFTCOL"
+version = 1
+order = 90
+sources = ["soft.c"]
+tiles = ["tiles/soft-0.png", "tiles/soft-1.png", "tiles/soft-2.png", "tiles/soft-3.png", "tiles/soft-4.png"]
+
+[[settings]]
+key = "RANGE"
+values = 8
+saved = true
+public = true
+
+[[settings]]
+key = "SAT"
+values = 26
+saved = true
+public = true
+
+[[settings]]
+key = "HUE"
+values = 9
+saved = true
+public = true
+
+[[settings]]
+key = "LIGHT"
+values = 9
+saved = true
+public = true
+
+[[settings]]
+key = "SAT0"
+values = 26
+saved = true
+
+[[settings]]
+key = "HUE0"
+values = 9
+saved = true
+
+[[settings]]
+key = "LIGHT0"
+values = 9
+saved = true
+
+[[settings]]
+key = "SAT1"
+values = 26
+saved = true
+
+[[settings]]
+key = "HUE1"
+values = 9
+saved = true
+
+[[settings]]
+key = "LIGHT1"
+values = 9
+saved = true
+
+[[settings]]
+key = "SAT2"
+values = 26
+saved = true
+
+[[settings]]
+key = "HUE2"
+values = 9
+saved = true
+
+[[settings]]
+key = "LIGHT2"
+values = 9
+saved = true
+
+[[settings]]
+key = "SAT3"
+values = 26
+saved = true
+
+[[settings]]
+key = "HUE3"
+values = 9
+saved = true
+
+[[settings]]
+key = "LIGHT3"
+values = 9
+saved = true
+
+[[settings]]
+key = "SAT4"
+values = 26
+saved = true
+
+[[settings]]
+key = "HUE4"
+values = 9
+saved = true
+
+[[settings]]
+key = "LIGHT4"
+values = 9
+saved = true
+
+[[settings]]
+key = "SAT5"
+values = 26
+saved = true
+
+[[settings]]
+key = "HUE5"
+values = 9
+saved = true
+
+[[settings]]
+key = "LIGHT5"
+values = 9
+saved = true
+
+[[settings]]
+key = "SAT6"
+values = 26
+saved = true
+
+[[settings]]
+key = "HUE6"
+values = 9
+saved = true
+
+[[settings]]
+key = "LIGHT6"
+values = 9
+saved = true
+
+[page]
+setting = "RANGE"
+off_row = true
+settings = ["RANGE", "SAT", "HUE", "LIGHT"]
+
+[[filters]]
+apply = "soft_colour"
+setting = "RANGE"
+stage = "colour"
+
+[events]
+handle = "soft_colour_event"
+on = ["system_ready", "setting_changed"]

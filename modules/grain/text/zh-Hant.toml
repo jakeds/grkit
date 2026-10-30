@@ -1,0 +1,13 @@
+title = "Grain"
+rows = ["Off", "5%", "10%", "15%", "20%", "25%", "30%", "35%", "40%", "45%", "50%", "55%", "60%", "65%", "70%", "75%", "80%", "85%", "90%", "95%", "100%"]
+[settings."CORE.GRAIN"]
+label = "Strength"
+[settings."CORE.GRAIN_SIZE"]
+label = "Size"
+values = ["Default", "Auto by ISO", "Small", "Medium", "Large"]
+[settings."CORE.GRAIN_BOOST"]
+label = "Boost"
+values = ["Default", "1.5x", "2x"]
+[settings."CORE.GRAIN_PATTERN"]
+label = "Pattern"
+values = ["Moment", "Fixed seed"]

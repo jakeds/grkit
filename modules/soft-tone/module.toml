@@ -1,0 +1,32 @@
+id = "SOFTTONE"
+version = 1
+order = 60
+sources = ["soft.c"]
+tiles = ["tiles/soft-0.png", "tiles/soft-1.png", "tiles/soft-2.png"]
+
+[[settings]]
+key = "BLACK"
+values = 21
+saved = true
+public = true
+
+[[settings]]
+key = "ROLLOFF"
+values = 21
+saved = true
+public = true
+
+[page]
+setting = "BLACK"
+off_row = true
+settings = ["BLACK", "ROLLOFF"]
+
+[[filters]]
+apply = "soft_black"
+setting = "BLACK"
+stage = "black"
+
+[[filters]]
+apply = "soft_rolloff"
+setting = "ROLLOFF"
+stage = "rolloff"

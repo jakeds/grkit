@@ -1,4 +1,5 @@
-use grkit_core::{cube, effects, fit, packaging, site};
+use grkit_core::effects::{self, Effect};
+use grkit_core::{cube, fit, packaging, site};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 
@@ -53,7 +54,7 @@ fn keep_red() -> Value {
     effects::parse_json(&fs::read(path).unwrap()).unwrap()
 }
 
-fn decoded(definition: &Value) -> Value {
+fn decoded(definition: &Value) -> Effect {
     effects::decode(&effects::compile_definition(definition).unwrap())
         .unwrap()
         .0
@@ -67,15 +68,29 @@ fn entry(table: &[u8], r: usize, g: usize, b: usize) -> [u8; 3] {
 #[test]
 fn standard_preview_returns_each_input() {
     let curve: Vec<u16> = (0..256).map(|v| v * 64).collect();
-    let standard = json!({"effect_id": "standard-v1", "name": "Standard", "flags": 0,
-        "matrix": fit::STANDARD_LOOK, "curves": [&curve, &curve, &curve]});
+    let standard = Effect::from_json(&json!({"effect_id": "standard-v1", "name": "Standard",
+        "flags": 0, "matrix": fit::STANDARD_LOOK, "curves": [&curve, &curve, &curve]}))
+    .unwrap();
     let table = site::preview_lut(&synthetic_base(), &standard).unwrap();
     assert_eq!(table.len(), site::LUT_SIZE.pow(3) * 3);
     let level = |i: usize| (i as f64 * 255.0 / (site::LUT_SIZE - 1) as f64).round() as i32;
+    let step = |i: usize| i as f64 / (site::LUT_SIZE - 1) as f64;
+    // The highest code of the curves above.
+    let highest = curve[255] as f64 / 16384.0;
+    let mut checked = 0;
     for b in 0..site::LUT_SIZE {
         for g in 0..site::LUT_SIZE {
             for r in 0..site::LUT_SIZE {
                 let actual = entry(&table, r, g, b);
+                // A Standard JPEG has the camera's chroma suppression. Near black and white,
+                // the camera cannot write a saturated color: its codes before the suppression
+                // leave the range of the curves. The table returns each color that the
+                // camera can write.
+                let codes = fit::undisplay([step(r), step(g), step(b)]);
+                if codes.iter().any(|v| !(-1e-9..=highest).contains(v)) {
+                    continue;
+                }
+                checked += 1;
                 for (value, expected) in actual.iter().zip([level(r), level(g), level(b)]) {
                     assert!(
                         (*value as i32 - expected).abs() <= 1,
@@ -85,6 +100,7 @@ fn standard_preview_returns_each_input() {
             }
         }
     }
+    assert!(checked * 10 > site::LUT_SIZE.pow(3) * 8, "{checked}");
 }
 
 #[test]
@@ -111,7 +127,7 @@ fn raw_previews_render_linear_input_without_inverting_standard() {
     let base = synthetic_base();
     let effect = decoded(&definition("ektar-100-edge-v1"));
     let model = fit::Model::new(&base);
-    let params = site::params(&effect).unwrap();
+    let params = site::params(&effect);
     let table = site::linear_preview_lut(&base, &effect).unwrap();
     let baseline = site::standard_linear_preview_lut(&base);
     let standard = std::array::from_fn(|r| {
@@ -134,6 +150,20 @@ fn raw_previews_render_linear_input_without_inverting_standard() {
 }
 
 #[test]
+fn catalog_base_gamma_is_checked() {
+    let base = synthetic_base();
+    assert_eq!(site::base_gamma(&base).unwrap(), base);
+    assert!(site::base_gamma(&base[..255]).is_err());
+    let mut decreasing = base;
+    decreasing[100] = decreasing[99] - 1;
+    assert!(site::base_gamma(&decreasing).is_err());
+    let mut offset = base;
+    offset[0] = 1;
+    assert!(site::base_gamma(&offset).is_err());
+    assert!(site::base_gamma(&[0; 256]).is_err());
+}
+
+#[test]
 fn raw_standard_baseline_does_not_clip_through_effect_curves() {
     // A saturated base gamma exposes the 16320 ceiling of identity effect curves.
     let base = [16384; 256];
@@ -149,6 +179,13 @@ fn published_effects_match_their_definitions() {
     let catalog = effects::parse_json(&files["catalog.json"]).unwrap();
     assert_eq!(catalog["schema"], "grkit-site-effects-v1");
     assert_eq!(catalog["target"], "gr3-2.10");
+    let published: Vec<u16> = catalog["base_gamma"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap() as u16)
+        .collect();
+    assert_eq!(site::base_gamma(&published).unwrap(), synthetic_base());
     assert_eq!(
         catalog["preview"],
         json!({
@@ -173,6 +210,7 @@ fn published_effects_match_their_definitions() {
         assert_eq!(blob, &effects::compile_definition(definition).unwrap());
         assert_eq!(entry["sha256"], packaging::sha256(blob));
         assert_eq!(entry["name"], definition["name"]);
+        assert_eq!(entry["cover"], definition["icon"]);
         assert_eq!(
             from_base64(entry["icon"].as_str().unwrap()),
             effects::decode(blob).unwrap().1
@@ -203,7 +241,7 @@ fn selective_color_previews_keep_red_and_gray_other_hues() {
     let base = synthetic_base();
     let accent = site::preview_lut(&base, &decoded(&keep_red())).unwrap();
     let mut standard = decoded(&keep_red());
-    standard.as_object_mut().unwrap().remove("selective_color");
+    standard.selective = None;
     let plain = site::preview_lut(&base, &standard).unwrap();
     let last = site::LUT_SIZE - 1;
     // Saturated red keeps its color; green and blue turn neutral.
@@ -230,10 +268,8 @@ fn selective_color_previews_keep_red_and_gray_other_hues() {
 fn raw_previews_apply_selective_color_after_rendering() {
     let base = synthetic_base();
     let effect = decoded(&keep_red());
-    let params = site::params(&effect).unwrap();
-    let selective = grkit_core::selective::Selective::from_json(&effect["selective_color"])
-        .unwrap()
-        .table();
+    let params = site::params(&effect);
+    let selective = effect.selective.unwrap().table();
     let model = fit::Model::new(&base);
     let table = site::linear_preview_lut(&base, &effect).unwrap();
     for [r, g, b] in [[32, 0, 0], [0, 32, 0], [0, 0, 32], [16, 16, 16]] {
@@ -242,4 +278,11 @@ fn raw_previews_apply_selective_color_after_rendering() {
             .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
         assert_eq!(entry(&table, r, g, b), expected);
     }
+}
+
+#[test]
+fn the_preview_target_is_a_camera_runtime() {
+    assert!(grkit_core::camera::CAMERAS
+        .iter()
+        .any(|camera| camera.runs(site::PREVIEW_TARGET)));
 }

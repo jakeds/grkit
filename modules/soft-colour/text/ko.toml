@@ -1,0 +1,17 @@
+title = "Colour"
+rows = ["Off", "Reds", "Oranges", "Yellows", "Greens", "Cyans", "Blues", "Magentas"]
+
+[settings.RANGE]
+label = "Colour"
+
+[settings.SAT]
+label = "Saturation"
+values = ["Neutral", "-75%", "-70%", "-65%", "-60%", "-55%", "-50%", "-45%", "-40%", "-35%", "-30%", "-25%", "-20%", "-15%", "-10%", "-5%", "+5%", "+10%", "+15%", "+20%", "+25%", "+30%", "+35%", "+40%", "+45%", "+50%"]
+
+[settings.HUE]
+label = "Hue"
+values = ["Neutral", "-20", "-15", "-10", "-5", "+5", "+10", "+15", "+20"]
+
+[settings.LIGHT]
+label = "Brightness"
+values = ["Neutral", "-20", "-15", "-10", "-5", "+5", "+10", "+15", "+20"]

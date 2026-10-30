@@ -1,0 +1,27 @@
+{
+  "version": "1.3.4-soft.16",
+  "upstream": "f300328",
+  "hardware_tested": false,
+  "rust_tests_passed": 217,
+  "web_tests_passed": 123,
+  "native_contracts_passed": 18,
+  "grain_emulation": {
+    "amplitude_cases": 92,
+    "defaults_match_soft15_noise": true,
+    "fixed_seed_repeats": true,
+    "return_to_default_matches_prior": true,
+    "off_bypasses_overrides": true,
+    "final_jpeg_pixels_tested": false
+  },
+  "packages_verified": [
+    "GR III",
+    "GR IIIx",
+    "GR IV 1.11",
+    "GR IV Monochrome 1.00"
+  ],
+  "browser_download_verified": "GR IIIx",
+  "notes": [
+    "Startup time has not been measured on a physical camera.",
+    "Other upstream GR IV targets remain in source, outside this builder release."
+  ]
+}

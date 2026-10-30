@@ -1,0 +1,32 @@
+id = "SOFTLITE"
+version = 1
+order = 70
+sources = ["soft.c"]
+tiles = ["tiles/soft-0.png", "tiles/soft-1.png", "tiles/soft-2.png"]
+
+[[settings]]
+key = "BLOOM"
+values = 21
+saved = true
+public = true
+
+[[settings]]
+key = "HALATION"
+values = 21
+saved = true
+public = true
+
+[page]
+setting = "BLOOM"
+off_row = true
+settings = ["BLOOM", "HALATION"]
+
+[[filters]]
+apply = "soft_bloom"
+setting = "BLOOM"
+stage = "bloom"
+
+[[filters]]
+apply = "soft_halation"
+setting = "HALATION"
+stage = "halation"

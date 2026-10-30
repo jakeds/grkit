@@ -1,44 +1,54 @@
 //! Deterministic 40 × 40 RGBA menu tiles.
 //!
 //! Tiles follow the camera's own menu icons: a dark square with a gray frame
-//! and anti-aliased text. Effect icons can instead be gray film covers
+//! and anti-aliased text. The native list icons have a 38 x 36 frame, and the
+//! icons of the ADJ toolbar a 38 x 38 frame. Effect icons can instead be gray film covers
 //! (`render_box`, `render_cine`) that span the tile width. Alpha is binary;
 //! text edges blend in RGB.
 
 use ab_glyph::{point, Font, FontRef, PxScale, Rect, ScaleFont};
 use anyhow::{bail, ensure, Context, Result};
 
-/// Inter Medium 4.1, SIL Open Font License 1.1 (`assets/Inter-LICENSE.txt`).
-const FONT: &[u8] = include_bytes!("../assets/Inter-Medium.ttf");
+/// Roboto Condensed Bold, an instance of Roboto Condensed 3.008 at weight 700
+/// with the ASCII characters only, SIL Open Font License 1.1
+/// (`assets/RobotoCondensed-LICENSE.txt`). The native toolbar icons, such as
+/// "Focus", have bold condensed text.
+const FONT: &[u8] = include_bytes!("../assets/RobotoCondensed-Bold.ttf");
 /// Effect icon labels use capitals and digits, as the native text tiles do.
 const LABEL_CHARACTERS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-/// Native text tiles, such as "Std", use about 15-pixel capitals.
-const LABEL_SIZE: f32 = 21.0;
-/// Text stays inside the frame with a small margin.
-const LABEL_WIDTH: f32 = 30.0;
+/// The largest label size. Its capitals are about 10 pixels high, close to the
+/// 11 pixels of the native toolbar text, such as "Focus". A label that does
+/// not fit `LABEL_WIDTH` at this size shrinks.
+const LABEL_SIZE: f32 = 18.0;
+/// Text keeps at least 4 pixels from each side of the 36-pixel frame inside.
+const LABEL_WIDTH: f32 = 28.0;
 
 fn dot(rgba: &mut [u8], x: usize, y: usize, shade: u8) {
     let offset = (y * 40 + x) * 4;
     rgba[offset..offset + 4].copy_from_slice(&[shade, shade, shade, 255]);
 }
 
-fn background() -> Vec<u8> {
+/// A dark square with a gray frame on columns `left..=right` and rows
+/// `top..=bottom`. The rest of the tile stays transparent.
+fn frame(left: usize, top: usize, right: usize, bottom: usize) -> Vec<u8> {
     let mut rgba = vec![0; 40 * 40 * 4];
-    for y in 3..37 {
-        for x in 3..37 {
-            dot(
-                &mut rgba,
-                x,
-                y,
-                if x == 3 || x == 36 || y == 3 || y == 36 {
-                    128
-                } else {
-                    51
-                },
-            );
+    for y in top..=bottom {
+        for x in left..=right {
+            let edge = x == left || x == right || y == top || y == bottom;
+            dot(&mut rgba, x, y, if edge { 128 } else { 51 });
         }
     }
     rgba
+}
+
+/// The frame of a list row, as the native list icons have it.
+fn background() -> Vec<u8> {
+    frame(1, 2, 38, 37)
+}
+
+/// The frame of the ADJ toolbar, as the native toolbar icons have it.
+fn toolbar_background() -> Vec<u8> {
+    frame(1, 1, 38, 38)
 }
 
 /// Blend `ink` over an opaque tile pixel by glyph coverage.
@@ -162,15 +172,14 @@ pub fn render_tile(label: &str, shape: &str) -> Result<Vec<u8>> {
     Ok(rgba)
 }
 
-/// Inter Black 4.1, from the same release and license as `FONT`. Only the
-/// cover icons use it.
-const COVER_FONT: &[u8] = include_bytes!("../assets/Inter-Black.ttf");
+/// Roboto Condensed Black, the weight 900 instance of the same release, with
+/// the same characters and license as `FONT`. Only the cover icons use it.
+const COVER_FONT: &[u8] = include_bytes!("../assets/RobotoCondensed-Black.ttf");
 /// Cover shades: the light bands, the dark text on them, and the body.
 const LIGHT: u8 = 214;
 const DARK: u8 = 40;
 const BODY: u8 = 51;
-/// The cover rows. Above and below, the 3-pixel transparent margin of the
-/// other tiles stays. The cover spans the full tile width, so that a name
+/// The cover rows, with a 3-pixel transparent margin above and below. The cover spans the full tile width, so that a name
 /// such as KODACHROME fits on one line.
 const COVER: i32 = 3;
 const COVER_END: i32 = 37;
@@ -186,7 +195,7 @@ fn fill(rgba: &mut [u8], top: i32, bottom: i32, shade: u8) {
     }
 }
 
-/// Draw `label` in Inter Black, centered on x = 20, with `capital` pixels of
+/// Draw `label` in Roboto Condensed Black, centered on x = 20, with `capital` pixels of
 /// capital height on the `baseline` row. The text compresses horizontally to
 /// fit `width` pixels. Returns `None`, and draws nothing, if the text would
 /// need a horizontal scale below `min_compression`.
@@ -377,14 +386,47 @@ enum Bottom {
     Stripes,
 }
 
+/// The capital heights, in pixels, that a cover tries for a large name, largest first.
+const LARGE_NAME: [f32; 5] = [9.0, 8.0, 7.0, 6.0, 5.0];
+/// The capital heights of a name that is too wide for the pixel font, largest first.
+const SMALL_NAME: [f32; 2] = [5.0, 4.0];
+/// A name may compress to this horizontal scale before a smaller size is tried.
+const NAME_COMPRESSION: f32 = 0.6;
+/// The width of a name in Roboto Condensed Black: the tile width less one pixel on each side.
+const NAME_WIDTH: f32 = 38.0;
+
+/// Draws `name` in Roboto Condensed Black at the largest capital height in `capitals` that fits,
+/// centered vertically on `center`. Returns false, and draws nothing, if no size fits.
+fn fitted_name(rgba: &mut [u8], name: &str, capitals: &[f32], center: f32) -> bool {
+    capitals.iter().any(|&capital| {
+        let baseline = (center + capital / 2.0).round() as i32;
+        cover_text(
+            rgba,
+            name,
+            capital,
+            baseline,
+            -0.02,
+            NAME_WIDTH,
+            NAME_COMPRESSION,
+            255,
+        )
+        .is_some()
+    })
+}
+
 /// A gray cover: a light band with the brand, then a dark body with the film
-/// name and a large number. The brand uses Inter Black when it fits without
-/// compression, and the pixel font otherwise. The name always uses the pixel
-/// font.
+/// name and a large number. The brand uses Roboto Condensed Black when it fits without
+/// compression, and the pixel font otherwise. The name uses the pixel font. A
+/// name that the pixel font cannot draw in 40 pixels uses a smaller Roboto Condensed Black.
+/// An empty `number` means no number: the name then uses Roboto Condensed Black, as large
+/// as fits, centered on the body. A name that fits no large size uses the pixel
+/// font, and then the smaller Roboto Condensed Black.
 fn cover(brand: &str, name: &str, number: &str, bottom: Bottom) -> Result<Vec<u8>> {
     check_cover_label(brand, "brand")?;
     check_cover_label(name, "name")?;
-    check_cover_label(number, "number")?;
+    if !number.is_empty() {
+        check_cover_label(number, "number")?;
+    }
     let mut rgba = vec![0; 40 * 40 * 4];
     fill(&mut rgba, COVER, COVER_END, BODY);
     fill(&mut rgba, COVER, 12, LIGHT);
@@ -392,21 +434,37 @@ fn cover(brand: &str, name: &str, number: &str, bottom: Bottom) -> Result<Vec<u8
         pixel_text(&mut rgba, brand, 5, DARK)?;
     }
     // The number sits one row lower without a bottom band, and one row
-    // higher above the stripes.
-    let (name_top, baseline) = match bottom {
-        Bottom::None => (15, 33),
+    // higher above the stripes. `body_end` is the first row below the body.
+    let (name_top, baseline, body_end) = match bottom {
+        Bottom::None => (15, 33, COVER_END),
         Bottom::Band => {
             fill(&mut rgba, 34, COVER_END, LIGHT);
-            (14, 32)
+            (14, 32, 34)
         }
         Bottom::Stripes => {
             for row in [32, 34, 36] {
                 fill(&mut rgba, row, row + 1, LIGHT);
             }
-            (14, 31)
+            (14, 31, 32)
         }
     };
-    pixel_text(&mut rgba, name, name_top, 255)?;
+    if number.is_empty() {
+        // The body starts below the brand band, on row 12.
+        let center = (12 + body_end) as f32 / 2.0;
+        if !fitted_name(&mut rgba, name, &LARGE_NAME, center) {
+            // The 5-pixel font, centered on the body.
+            let pixel = pixel_text(&mut rgba, name, 12 + (body_end - 12 - 5) / 2, 255);
+            if pixel.is_err() && !fitted_name(&mut rgba, name, &SMALL_NAME, center) {
+                pixel.with_context(|| format!("Cover name {name:?} does not fit"))?;
+            }
+        }
+        return Ok(rgba);
+    }
+    // `pixel_text` draws nothing when it fails, so a smaller Roboto Condensed Black can take its place.
+    let pixel = pixel_text(&mut rgba, name, name_top, 255);
+    if pixel.is_err() && !fitted_name(&mut rgba, name, &SMALL_NAME, name_top as f32 + 2.5) {
+        pixel.with_context(|| format!("Cover name {name:?} does not fit"))?;
+    }
     cover_text(
         &mut rgba,
         number,
@@ -422,6 +480,7 @@ fn cover(brand: &str, name: &str, number: &str, bottom: Bottom) -> Result<Vec<u8
 }
 
 /// A still film box. Professional films have a light band at the bottom.
+/// An empty `number` gives a large name and no number.
 pub fn render_box(brand: &str, name: &str, number: &str, band: bool) -> Result<Vec<u8>> {
     cover(
         brand,
@@ -432,6 +491,7 @@ pub fn render_box(brand: &str, name: &str, number: &str, band: bool) -> Result<V
 }
 
 /// A motion picture film label, with three light stripes at the bottom.
+/// An empty `number` gives a large name and no number.
 pub fn render_cine(brand: &str, name: &str, number: &str) -> Result<Vec<u8>> {
     cover(brand, name, number, Bottom::Stripes)
 }
@@ -440,163 +500,243 @@ pub fn off_pixels() -> Vec<u8> {
     soft_symbol("off")
 }
 
-/// A panoramic frame inside the same tile used by the other module entries.
-pub fn framing_pixels() -> Vec<u8> {
+/// The GRKit entry of the ADJ toolbar.
+pub fn grkit_pixels() -> Vec<u8> {
+    soft_symbol("soft")
+}
+
+/// The About row, which gives the version. Its own tile keeps a second GRK
+/// tile out of the GRKit root.
+pub fn version_pixels() -> Vec<u8> {
     let mut rgba = background();
-    for y in 12..28 {
-        for x in 7..33 {
-            let edge = x == 7 || x == 32 || y == 12 || y == 27;
-            dot(&mut rgba, x, y, if edge { 255 } else { 20 });
-        }
-    }
+    text(&mut rgba, "VER", LABEL_SIZE, LABEL_WIDTH, 20.0, 255);
     rgba
 }
 
-/// A frame with the proportions of `width` x `height`, centered above its label.
-fn ratio_pixels(label: &str, width: usize, height: usize) -> Vec<u8> {
+/// The Modules row, which lists the modules.
+pub fn modules_pixels() -> Vec<u8> {
     let mut rgba = background();
-    let (left, top) = ((40 - width) / 2, 6 + (19 - height) / 2);
-    for y in top..top + height {
-        for x in left..left + width {
-            let edge = x == left || x == left + width - 1 || y == top || y == top + height - 1;
-            dot(&mut rgba, x, y, if edge { 255 } else { 20 });
-        }
-    }
-    text(&mut rgba, label, 11.0, 32.0, 30.5, 255);
+    text(&mut rgba, "MOD", LABEL_SIZE, LABEL_WIDTH, 20.0, 255);
     rgba
 }
 
-/// Framing artwork in runtime order: the module tile, then the XPan (65:24),
-/// 16:9, and 4:3 ratios.
-pub fn framing_tiles() -> Vec<Vec<u8>> {
-    vec![
-        framing_pixels(),
-        ratio_pixels("XPan", 30, 11),
-        ratio_pixels("16:9", 30, 17),
-        ratio_pixels("4:3", 24, 18),
-    ]
-}
+/// The live-view labels in label order: the load cue, then the Framing ratios
+/// in capture area order (runtime/framing.c: photo_boxes), so label n names
+/// capture area n, then the sign of Date Imprint (LABEL_DATE in
+/// runtime/sdk/grkit.h).
+pub const OVERLAY_LABELS: [&str; 10] = [
+    "Soft Loaded",
+    "XPan",
+    "16:9",
+    "4:3",
+    "2.35",
+    "1:1",
+    "5:4",
+    "7:6",
+    "FP100C",
+    "DATE",
+];
+/// The width of the black outline around the text. The native live-view text
+/// has one black pixel around the gray edge of each stroke, and keeps the
+/// gaps between characters transparent.
+pub const OVERLAY_OUTLINE: usize = 1;
+/// The capital height of the native live-view text, such as the focus
+/// distance "2.5m".
+pub const OVERLAY_CAPITAL: usize = 24;
+/// Rows above the capitals for ascenders and round overshoot, such as the d
+/// and the G of "Soft Loaded", and rows below the baseline for overshoot.
+const OVERLAY_ABOVE: usize = 2;
+const OVERLAY_BELOW: usize = 1;
+/// The height of each label: the capitals, the rows above and below them,
+/// and the outline.
+pub const OVERLAY_LABEL_HEIGHT: usize =
+    OVERLAY_ABOVE + OVERLAY_CAPITAL + OVERLAY_BELOW + 2 * OVERLAY_OUTLINE;
+/// Roboto Condensed Light, an instance of Roboto Condensed 3.008 at weight 300
+/// with the ASCII characters only, SIL Open Font License 1.1
+/// (`assets/RobotoCondensed-LICENSE.txt`). Its shapes and weight are close
+/// to those of the native live-view text.
+const OVERLAY_FONT: &[u8] = include_bytes!("../assets/RobotoCondensed-Light.ttf");
+/// The native text is narrower than Roboto Condensed: its digits are about 13
+/// pixels wide.
+const OVERLAY_CONDENSE: f32 = 0.87;
+/// The native text has more space between its characters.
+const OVERLAY_TRACKING: f32 = 3.0;
 
-/// Composition guide styles, in runtime order after Off.
-#[derive(Clone, Copy)]
-enum Guide {
-    Thirds,
-    Center,
-    Golden,
-    Diagonals,
-}
-
-/// A frame of about 3:2 with its guide lines, centered horizontally. Lines are
-/// gray, so they stay distinct from the frame.
-fn guide_frame(rgba: &mut [u8], top: usize, guide: Guide) {
-    let (width, height) = (28, 18);
-    let left = (40 - width) / 2;
-    let (right, bottom) = (left + width - 1, top + height - 1);
-    for y in top..=bottom {
-        for x in left..=right {
-            let edge = x == left || x == right || y == top || y == bottom;
-            dot(rgba, x, y, if edge { 255 } else { 20 });
-        }
-    }
-    // Symmetric line offsets from the left and top edges.
-    let grid = |rgba: &mut [u8], column: usize, row: usize| {
-        for x in [left + column, right - column] {
-            (top + 1..bottom).for_each(|y| dot(rgba, x, y, 170));
-        }
-        for y in [top + row, bottom - row] {
-            (left + 1..right).for_each(|x| dot(rgba, x, y, 170));
-        }
+/// The text coverage of `label`: its width, then one coverage value for each
+/// pixel, row by row. The capitals start `OVERLAY_OUTLINE + OVERLAY_ABOVE`
+/// rows from the top, and the text starts after the left outline.
+fn overlay_coverage(label: &str) -> (usize, Vec<f32>) {
+    let font = FontRef::try_from_slice(OVERLAY_FONT).expect("embedded font is valid");
+    let unit = font
+        .outline_glyph(font.glyph_id('H').with_scale(100.0))
+        .expect("the font has H")
+        .px_bounds()
+        .height()
+        / 100.0;
+    let size = OVERLAY_CAPITAL as f32 / unit;
+    let scale = PxScale {
+        x: size * OVERLAY_CONDENSE * if label == "FP100C" { 0.65 } else { 1.0 },
+        y: size,
     };
-    match guide {
-        Guide::Thirds => grid(rgba, 9, 6),
-        Guide::Golden => grid(rgba, 10, 7),
-        Guide::Center => {
-            // Even dimensions center the cross between two pixel rows and columns.
-            for offset in [0, 1] {
-                (left + 9..=right - 9).for_each(|x| dot(rgba, x, top + 8 + offset, 170));
-                (top + 4..=bottom - 4).for_each(|y| dot(rgba, left + 13 + offset, y, 170));
-            }
+    let scaled = font.as_scaled(scale);
+    let mut caret = 0.0;
+    let mut previous = None;
+    let mut outlines = Vec::new();
+    for character in label.chars() {
+        let id = scaled.glyph_id(character);
+        if let Some(previous) = previous {
+            caret += scaled.kern(previous, id);
         }
-        Guide::Diagonals => {
-            for x in 1..width - 1 {
-                // Round half up, as the runtime's Bresenham lines do.
-                let y = (2 * x * (height - 1) + width - 1) / (2 * (width - 1));
-                dot(rgba, left + x, top + y, 170);
-                dot(rgba, right - x, top + y, 170);
-            }
-        }
+        outlines.extend(font.outline_glyph(id.with_scale_and_position(scale, point(caret, 0.0))));
+        caret += scaled.h_advance(id)
+            + if label == "FP100C" {
+                1.5
+            } else {
+                OVERLAY_TRACKING
+            };
+        previous = Some(id);
     }
-}
-
-/// A guide frame centered above its label.
-fn guide_pixels(label: &str, guide: Guide) -> Vec<u8> {
-    let mut rgba = background();
-    guide_frame(&mut rgba, 6, guide);
-    text(&mut rgba, label, 11.0, 32.0, 30.5, 255);
-    rgba
-}
-
-/// Guides artwork in runtime order: the module tile, then thirds, center,
-/// golden ratio, and diagonals.
-pub fn guides_tiles() -> Vec<Vec<u8>> {
-    let mut module = background();
-    guide_frame(&mut module, 11, Guide::Thirds);
-    vec![
-        module,
-        guide_pixels("3x3", Guide::Thirds),
-        guide_pixels("Ctr", Guide::Center),
-        guide_pixels("Phi", Guide::Golden),
-        guide_pixels("Diag", Guide::Diagonals),
-    ]
-}
-
-/// Date stamp artwork in runtime order: the module tile, then the 'YY M D,
-/// 'YY M D H:MM, M D 'YY, and D M 'YY styles, each named by a sample.
-pub fn stamp_tiles() -> Vec<Vec<u8>> {
-    ["DATE", "'26", "9:05", "M D", "D M"]
+    let bounds = outlines
         .iter()
-        .map(|label| {
-            let mut rgba = background();
-            text(&mut rgba, label, LABEL_SIZE, LABEL_WIDTH, 20.0, 255);
-            rgba
+        .map(|outline| outline.px_bounds())
+        .reduce(|a, b| Rect {
+            min: point(a.min.x.min(b.min.x), a.min.y.min(b.min.y)),
+            max: point(a.max.x.max(b.max.x), a.max.y.max(b.max.y)),
         })
-        .collect()
+        .expect("a label has outlines");
+    let width = bounds.width().ceil() as usize + 2 * OVERLAY_OUTLINE;
+    // Whole-pixel offsets keep vertical and horizontal stems sharp. The
+    // baseline is the row after the capitals.
+    let dx = OVERLAY_OUTLINE as i32 - bounds.min.x.floor() as i32;
+    let dy = (OVERLAY_OUTLINE + OVERLAY_ABOVE + OVERLAY_CAPITAL) as i32;
+    let mut coverage = vec![0f32; width * OVERLAY_LABEL_HEIGHT];
+    for outline in outlines {
+        let origin = outline.px_bounds().min;
+        outline.draw(|x, y, value| {
+            let (x, y) = (
+                origin.x as i32 + x as i32 + dx,
+                origin.y as i32 + y as i32 + dy,
+            );
+            if (0..width as i32).contains(&x) && (0..OVERLAY_LABEL_HEIGHT as i32).contains(&y) {
+                let cell = &mut coverage[y as usize * width + x as usize];
+                *cell = (*cell + value).min(1.0);
+            }
+        });
+    }
+    (width, coverage)
 }
 
-/// Light speckles in rows `top..bottom`, one in `period` pixels on average.
-/// A fixed hash places them, so the artwork stays deterministic.
-fn speckles(rgba: &mut [u8], top: usize, bottom: usize, period: u32) {
-    for y in top..bottom {
-        for x in 6..34 {
-            let hash = (x as u32)
-                .wrapping_mul(0x9e37_79b1)
-                .wrapping_add((y as u32).wrapping_mul(0x85eb_ca77))
-                .rotate_left(13)
-                .wrapping_mul(0xc2b2_ae3d);
-            if (hash >> 16).is_multiple_of(period) {
-                dot(rgba, x, y, 220);
+/// The pixels of `label`: 0 where the label is transparent, else the gray of
+/// an opaque pixel, 1 for the black outline and up to 255 for white text.
+/// Text edges blend toward the outline.
+fn overlay_label(label: &str) -> (usize, Vec<u8>) {
+    let (width, coverage) = overlay_coverage(label);
+    // The rasterizer leaves tiny coverage between overlapping contours, so
+    // only coverage that rounds to a gray counts as text.
+    let coverage: Vec<f32> = coverage
+        .into_iter()
+        .map(|value| if value * 255.0 < 0.5 { 0.0 } else { value })
+        .collect();
+    let height = OVERLAY_LABEL_HEIGHT;
+    let radius = OVERLAY_OUTLINE as i32;
+    let inked = |x: i32, y: i32| {
+        (0..width as i32).contains(&x)
+            && (0..height as i32).contains(&y)
+            && coverage[y as usize * width + x as usize] > 0.0
+    };
+    let mut pixels = vec![0u8; width * height];
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let value = coverage[y as usize * width + x as usize];
+            // A round outline: each pixel within the radius of the text.
+            let outlined = (-radius..=radius).any(|oy| {
+                (-radius..=radius)
+                    .any(|ox| ox * ox + oy * oy <= radius * radius + 1 && inked(x + ox, y + oy))
+            });
+            pixels[y as usize * width + x as usize] = if value > 0.0 {
+                ((value * 255.0).round() as u8).max(1)
+            } else if outlined {
+                1
+            } else {
+                0
+            };
+        }
+    }
+    (width, pixels)
+}
+
+/// The label table that the installer copies after the menu text
+/// (`GRKIT_LABELS` in `runtime/abi.h`): for label n, a u16 width, a u16
+/// height, and the u32 offset of its rows at 8 n, then the rows of each
+/// label (`overlay_label`). Each row holds only its drawn pixels: a u8 span
+/// count, then for each span a u16 first column, a u16 length, and its
+/// pixels. A full redraw of the live view paints the labels, so it skips
+/// the transparent pixels without a test for each. The live view draws them
+/// as its own text: white with a black outline, without a background.
+pub fn overlay_labels() -> Vec<u8> {
+    let mut table = vec![0; OVERLAY_LABELS.len() * 8];
+    for (index, label) in OVERLAY_LABELS.iter().enumerate() {
+        let (width, pixels) = overlay_label(label);
+        let offset = table.len() as u32;
+        table[index * 8..index * 8 + 2].copy_from_slice(&(width as u16).to_le_bytes());
+        table[index * 8 + 2..index * 8 + 4]
+            .copy_from_slice(&(OVERLAY_LABEL_HEIGHT as u16).to_le_bytes());
+        table[index * 8 + 4..index * 8 + 8].copy_from_slice(&offset.to_le_bytes());
+        for row in pixels.chunks(width) {
+            let mut spans = Vec::new();
+            let mut x = 0;
+            while x < width {
+                if row[x] == 0 {
+                    x += 1;
+                    continue;
+                }
+                let first = x;
+                while x < width && row[x] != 0 {
+                    x += 1;
+                }
+                spans.push((first, x - first));
+            }
+            table.push(u8::try_from(spans.len()).expect("a label row has at most 255 spans"));
+            for (first, length) in spans {
+                table.extend((first as u16).to_le_bytes());
+                table.extend((length as u16).to_le_bytes());
+                table.extend(&row[first..first + length]);
             }
         }
     }
+    // Word alignment for the next copy.
+    table.resize(table.len().next_multiple_of(4), 0);
+    table
 }
 
-/// Grain artwork in runtime order: the module tile, then the weak, medium,
-/// and strong levels, with more speckles at each level.
-pub fn grain_tiles() -> Vec<Vec<u8>> {
-    let mut module = background();
-    speckles(&mut module, 6, 34, 4);
-    let mut tiles = vec![module];
-    for (label, period) in [("Weak", 9), ("Med", 5), ("Strong", 3)] {
-        let mut rgba = background();
-        speckles(&mut rgba, 6, 24, period);
-        text(&mut rgba, label, 11.0, 32.0, 30.5, 255);
-        tiles.push(rgba);
+/// Label `index` of a label table (`overlay_labels`): its width, its height,
+/// and each of its pixels, 0 where it is transparent.
+pub fn overlay_label_pixels(table: &[u8], index: usize) -> (usize, usize, Vec<u8>) {
+    let field = |at: usize, bytes: usize| {
+        (0..bytes).fold(0usize, |value, i| {
+            value | usize::from(table[at + i]) << (8 * i)
+        })
+    };
+    let (width, height, mut at) = (
+        field(index * 8, 2),
+        field(index * 8 + 2, 2),
+        field(index * 8 + 4, 4),
+    );
+    let mut pixels = vec![0; width * height];
+    for y in 0..height {
+        let spans = usize::from(table[at]);
+        at += 1;
+        for _ in 0..spans {
+            let (first, length) = (field(at, 2), field(at + 2, 2));
+            at += 4;
+            pixels[y * width + first..y * width + first + length]
+                .copy_from_slice(&table[at..at + length]);
+            at += length;
+        }
     }
-    tiles
+    (width, height, pixels)
 }
 
-/// Soft's own 40 px symbols, sampled at 4x for clean small-screen strokes.
-/// A consistent quiet tile, warm white ink, and optical 2 px strokes.
 pub fn soft_symbol(kind: &str) -> Vec<u8> {
     fn line(x: f32, y: f32, a: f32, b: f32, c: f32, d: f32, w: f32) -> bool {
         let dx = c - a;
@@ -815,18 +955,4 @@ pub fn soft_symbol(kind: &str) -> Vec<u8> {
         }
     }
     rgba
-}
-
-pub fn soft_tiles(kind: &str) -> Vec<Vec<u8>> {
-    let mut tiles = vec![soft_symbol(kind)];
-    if kind == "looks" {
-        tiles.push(soft_symbol("group-frame"));
-        tiles.push(soft_symbol("group-tone"));
-        tiles.push(soft_symbol("group-texture"));
-    }
-    tiles
-}
-
-pub fn plugins_pixels() -> Vec<u8> {
-    soft_symbol("soft")
 }

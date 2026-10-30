@@ -70,6 +70,19 @@ function table(url: string): Promise<Uint8Array> {
   );
 }
 
+/** Starts the download of a preview table, so a later preview of it starts sooner. */
+export function prefetchTable(url: string): void {
+  table(url).catch(() => undefined);
+}
+
+/**
+ * Makes `bytes` the table of `key`, for a table that the page made instead of fetching it, such
+ * as the table of an imported LUT. A `PreviewEffect` then gives `key` as its `table`.
+ */
+export function provideTable(key: string, bytes: Uint8Array): void {
+  tables.set(key, Promise.resolve(bytes));
+}
+
 let renderer: Render | undefined;
 
 async function render(image: LinearPicture, lut: Uint8Array, size: number): Promise<string> {

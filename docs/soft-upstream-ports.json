@@ -26,5 +26,32 @@
       "Monochrome always excludes Image Control"
     ],
     "scope": "Official firmware builds only; newer upstream relocation work is not ported."
+  },
+  "modular_migration": {
+    "upstream_head": "f300328",
+    "soft_version": "1.3.4-soft.16",
+    "features": [
+      "native MENU section",
+      "RAM loader plan and last core fast path",
+      "grain size",
+      "modular core and SDK",
+      "40 effects",
+      "native crop/playback fixes"
+    ],
+    "preserved": [
+      "Soft custom icons",
+      "5 percent strengths",
+      "warm split tones",
+      "selective colour",
+      "bloom and halation",
+      "mono date appearance",
+      "FP100C",
+      "Left back Right open OK stays"
+    ],
+    "builder_targets": [
+      "gr3-2.10",
+      "gr4-1.11"
+    ],
+    "hardware_tested": false
   }
 }

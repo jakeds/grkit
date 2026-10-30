@@ -1,0 +1,16 @@
+title = "프레이밍"
+rows = ["Native 3:2", "XPan", "16:9", "4:3", "2.35:1", "1:1", "5:4", "6x7 (7:6)", "FP100C"]
+# The value in the root row, which has less room than a row.
+
+summaries = ["Off", "XPan", "16:9", "4:3", "2.35:1", "1:1", "5:4", "7:6", "FP100C"]
+
+[settings."CORE.ASPECT"]
+label = "화상비율"
+
+[settings.MASK]
+label = "마스크"
+values = ["어둡게", "검정", "프레임 선"]
+
+[settings.LABEL]
+label = "비율 표시"
+values = ["Off", "On"]

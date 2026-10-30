@@ -2,21 +2,16 @@
 
 Four workflows release GRKit:
 
-- `Release PR` keeps one pull request from the `release` branch open while change files are pending. knope sets the version in `Cargo.toml` and `Cargo.lock` and writes `CHANGELOG.md` from the change files.
-- `Release` starts when the release pull request is merged. It tags the merge commit, runs the tests, and builds the site. Then it creates a draft GitHub release that holds the site and the device-test packages.
-  To build the site, it downloads the official GR III 2.10 and GR IV 1.11 firmware and checks their SHA-256. Then it builds a runtime for each with LLVM 21, publishes the effects in `effects/` with their preview tables, and deletes the firmware. It also builds the web page in `web/`.
-- `Deploy` commits the site of one release to the `site` branch. Cloudflare Pages deploys each commit on that branch. When the site serves the new version, `Deploy` publishes the release. `Release` calls `Deploy` when it has built a tag. Start `Deploy` by hand to deploy a release again.
-- `Site` starts when a push to `main` changes `web/`. It builds the web page from the source of the latest published release with `web/` from `main`, and it keeps the runtimes, effects, and guides of that release. The WebAssembly packager therefore matches the released runtimes, and the footer shows the released version. If `web/` on `main` needs a packager change that is not released yet, the build fails and the site stays as it is.
+- `Release PR` keeps one pull request from the `release` branch open while change files are pending. knope sets the version and writes `CHANGELOG.md` from the change files. `Release PR` then starts `Tests` on the `release` branch, so the pull request shows the test results.
+- `Release` starts when the release pull request is merged. It tags the merge commit, runs the tests, builds the site and the packages from the official firmware, and creates a draft GitHub release. Then it runs `Deploy`.
+- `Deploy` commits the site of one release to the `site` branch, which Cloudflare Pages deploys. When the site serves the new version, `Deploy` publishes the release. Start `Deploy` by hand to deploy a release again.
+- `Site` starts when a push to `main` changes `web/`. It rebuilds the web page with the runtimes and effects of the latest published release. If `web/` needs a packager change that is not released yet, the build fails and the site stays as it is. If a camera entry of `web/` needs a runtime build that the latest release does not have, `Site` deploys nothing, and the release that has the build deploys the page.
 
-The `site` branch holds only deployed sites, one commit for each deployment. `.github/scripts/commit-site.sh` makes these commits for `Deploy` and `Site`. It shares no history with `main`. Do not push to it by hand. The repository holds no Cloudflare credentials, because Cloudflare reads the branch through its GitHub app.
+The `site` branch holds only deployed sites and shares no history with `main`. Do not push to it by hand. The repository holds no Cloudflare credentials, because Cloudflare reads the branch through its GitHub app.
 
-The version is the `[workspace.package]` version in `Cargo.toml`. Each runtime `build.json` gives it, and the site shows it in the footer. A release tag is `v` and the version, for example `v0.1.0`.
+The version is the `[workspace.package]` version in `Cargo.toml`. A release tag is `v` and the version, for example `v1.2.0`.
 
-`grkit site` writes only `build.json` and `sd/` to `site/runtime/<target>/`, for `gr3-2.10` and `gr4-1.11`. It leaves out `objects/`, because the generated header there holds firmware bytes.
-`grkit effects publish` writes the v1 catalog, `.GRF` files, and preview tables to `site/effects/<target>/` for both targets.
-The tables include `preview/standard.lut` and `preview/<id>.lut`.
-
-`.github/scripts/build-guides.sh` writes the installation guides to `site/guides/<camera>/<language>.pdf` with Typst. `.github/scripts/install-guide-tools.sh` pins the Typst version and the fonts. The web build adds `index.html`, `assets/`, `samples/`, and `_headers`.
+The site holds no firmware bytes: `grkit site` leaves out the generated header of each runtime, and the release deletes the firmware after the build.
 
 ## Set up
 
@@ -27,20 +22,22 @@ The tables include `preview/standard.lut` and `preview/<id>.lut`.
    2. Install the Cloudflare GitHub app for this repository only.
    3. Set the production branch to `site` and the framework preset to None. Leave the build command empty. Set the build output directory to `/`.
    4. After Cloudflare creates the project, go to Settings, Builds, Branch control. Set the preview branch to None. Otherwise Cloudflare deploys the source of each other branch as a preview.
-4. Add the repository variable `SITE_URL` with the production URL of the site and no trailing slash, for example `https://<project>.pages.dev`. `Deploy` reads `SITE_URL/runtime/gr3-2.10/build.json` to find the version that the site serves.
+4. Add the repository variable `SITE_URL` with the production URL of the site and no trailing slash, for example `https://<project>.pages.dev`. `Deploy` reads the `build.json` of a runtime under `SITE_URL/runtime/` to find the version that the site serves.
 5. Optional: add the repository variable `PLAUSIBLE_HOST` with the origin of a Plausible server, for example `https://plausible.example.com`. Release then adds Plausible analytics to the site for the domain `grkit.app`.
 6. Keep a private backup of the firmware, so that a release does not depend on the Ricoh download:
-   1. Download `gr3_v210.zip` and `gr4_v111.zip` from Ricoh and accept the license. Do not change the zips.
+   1. Download `gr3_v210.zip`, `gr4_v111.zip`, and `gr4_v120.zip` from Ricoh and accept the license. Do not change the zips. Ricoh does not publish `gr4_v120_0528.zip`, a dump of a camera. Ask a maintainer for it.
    2. Create a private repository: `gh repo create <owner>/<backup-repo> --private`.
    3. Upload each zip as a release asset with the tag of its target:
       - `gh release create gr3-2.10 gr3_v210.zip --repo <owner>/<backup-repo> --notes "Private backup. Do not redistribute."`
       - `gh release create gr4-1.11 gr4_v111.zip --repo <owner>/<backup-repo> --notes "Private backup. Do not redistribute."`
+      - `gh release create gr4-1.20 gr4_v120.zip --repo <owner>/<backup-repo> --notes "Private backup. Do not redistribute."`
+      - `gh release create gr4-1.20-0528 gr4_v120_0528.zip --repo <owner>/<backup-repo> --notes "Private backup. Do not redistribute."`
    4. Create a fine-grained token that can read only the Contents of that repository.
    5. In this repository, add the secret `FIRMWARE_BACKUP_TOKEN` with the token, and the variable `FIRMWARE_BACKUP_REPO` with `<owner>/<backup-repo>`.
    6. Start the `Release` workflow with an existing release tag and `firmware_source` set to `backup`. If the `build` job succeeds, the backup works.
 
 The backup must stay private. The Ricoh license permits a copy only to save and back up the software.
-With `firmware_source` set to `auto`, the build uses the backup of a zip only if the Ricoh download of that zip fails or its SHA-256 differs. Both sources must have the same SHA-256.
+With `firmware_source` set to `auto`, the build uses the backup of a zip only if the Ricoh download of that zip fails or its SHA-256 differs. Both sources must have the same SHA-256. A zip that Ricoh does not publish always comes from the backup.
 
 ## Record a change
 
@@ -56,19 +53,22 @@ Show the GRKit version in the site footer.
 
 Write the text in English, for people who use GRKit. The change type sets the version and the `CHANGELOG.md` section:
 
-| Type | Section | Below 1.0 | From 1.0 |
-| --- | --- | --- | --- |
-| `patch` | Fixes | 0.1.0 to 0.1.1 | 1.0.0 to 1.0.1 |
-| `minor` | Features | 0.1.0 to 0.1.1 | 1.0.0 to 1.1.0 |
-| `major` | Breaking Changes | 0.1.0 to 0.2.0 | 1.0.0 to 2.0.0 |
+| Type | Section | Version |
+| --- | --- | --- |
+| `patch` | Fixes | 1.0.0 to 1.0.1 |
+| `minor` | Features | 1.0.0 to 1.1.0 |
+| `major` | Breaking Changes | 1.0.0 to 2.0.0 |
 
-Use `major` for a change that an earlier package cannot follow, for example a new format of `STATE.TXT`, `PLUGINS.TXT`, or the GRF files.
+Use `major` for a change that an earlier package cannot follow, for example a new format of `STATE.TXT`, the module files, or the GRF files.
 
 ## Release a version
 
 1. Merge the `Release vX.Y.Z` pull request. `Release` starts on the merge commit. It builds the release, deploys the site, and publishes the release.
 2. If the site does not serve the version within 15 minutes, `Deploy` fails and the release stays a draft. Examine the deployment in the Cloudflare dashboard. If it failed, retry it there, because a second `Deploy` run makes no new commit. Then start `Deploy` with the tag `vX.Y.Z`.
-3. The release holds `site.tar.gz`, `GRKit-device-test-gr3.zip`, `GRKit-device-test-gr3x.zip`, and `GRKit-device-test-gr4.zip`. Each package has the published runtime and no effects. Install the package of each camera that you have, and test it. The GR IV runtime stays experimental until it passes a test on a camera.
+3. The release holds these files. Install the package of each camera that you have, and test it.
+   - `GRKit-X.Y.Z-site.tar.gz`: the site. Releases before 1.2.0 name it `site.tar.gz`, and `Deploy` and `Site` accept both names.
+   - `GRKit-X.Y.Z-gr3.zip`, `GRKit-X.Y.Z-gr3x.zip`, and `GRKit-X.Y.Z-gr4.zip`: the package of each camera, with the published runtime of each of its builds, each effect in `effects/`, each official module, and the English guide. The site makes the same package by default.
+   - `GRKit-X.Y.Z-dump.zip`: the firmware dump tool of `runtime/dump/` for each camera. The site footer links to it.
 4. If a test fails, start `Deploy` with the tag of the previous release. The site then serves that release again.
 
 To release a commit on `main` without a release pull request, push a tag `vX.Y.Z` that matches the version in `Cargo.toml`. The first release, `v1.0.0`, uses this path.
@@ -76,4 +76,4 @@ To build a tag again, for example with `firmware_source` set to `backup`, start 
 
 A release keeps its files without an expiry date. To go back to an earlier version, start `Deploy` with its tag.
 
-The release toolchain is LLVM 21 on Ubuntu, not the reference Apple Clang. `Release` deploys its runtimes before a camera test, so test the device-test packages right after each release. To test a runtime before the release, build it with LLVM 21 as `release.yml` does.
+The release toolchain is LLVM 21 on Ubuntu, not the reference Apple Clang. `Release` deploys its runtimes before a camera test, so test the camera packages right after each release. To test a runtime before the release, build it with LLVM 21 as `release.yml` does.

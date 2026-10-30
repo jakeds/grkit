@@ -1,8 +1,12 @@
 //! Native firmware build adapters. The core crate remains independent of processes and files.
 pub mod arm;
 pub mod components;
+pub mod dump;
 pub mod firmware;
 pub mod loader;
+pub mod module;
+pub mod port;
+pub mod relocation;
 pub mod target;
 pub mod toolchain;
 
@@ -29,11 +33,41 @@ pub struct Patch {
     pub points: u32,
     pub before: Vec<u8>,
     pub after: Vec<u8>,
+    /// What the address moves with when the installer relocates the private
+    /// code. `None` keeps it.
+    pub site: Option<Anchor>,
 }
+
+/// An address that moves when the installer relocates the private code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Anchor {
+    /// A firmware address of the pinned image.
+    Firmware(u32),
+    /// The private tail.
+    Tail,
+}
+
+/// A word of a patch that the installer changes when it relocates the
+/// private code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reference {
+    pub patch: usize,
+    pub offset: usize,
+    /// A B or BL whose target is the anchor, or else a word that holds an
+    /// address of the anchor.
+    pub branch: bool,
+    pub anchor: Anchor,
+}
+
 #[derive(Debug)]
 pub struct PatchPlan {
     pub patches: Vec<Patch>,
     pub relocations: Vec<(usize, usize)>,
+    /// The firmware and tail references of the private code.
+    pub references: Vec<Reference>,
+    /// The services that modules import: the hash of each name
+    /// (`grkit_core::grm::symbol_hash`) and the offset of its code in the tail.
+    pub exports: Vec<(u32, u32)>,
 }
 #[derive(Debug)]
 pub struct BuildResult {
@@ -76,74 +110,30 @@ pub fn validate_plan(plan: &PatchPlan) -> Result<()> {
     Ok(())
 }
 
-// Every file under runtime/, from build.rs.
-include!(concat!(env!("OUT_DIR"), "/runtime_sources.rs"));
+// Every file under runtime/, and the Rust sources and assets of a build, from
+// build.rs.
+include!(concat!(env!("OUT_DIR"), "/sources.rs"));
 
+/// A file under `runtime/` by its path there, such as `targets/gr4.h`.
+pub fn runtime_source(path: &str) -> Option<&'static [u8]> {
+    RUNTIME_SOURCES
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map(|&(_, bytes)| bytes)
+}
+
+/// The SHA-256 of each file that can change a runtime build, by its path in
+/// the repository.
 pub fn source_hashes() -> BTreeMap<String, String> {
-    let mut sources: BTreeMap<_, _> = RUNTIME_SOURCES
+    RUNTIME_SOURCES
         .iter()
         .map(|(name, bytes)| (format!("runtime/{name}"), sha256(bytes)))
-        .collect();
-    for (name, bytes) in [
-        ("lib.rs", include_bytes!("lib.rs").as_slice()),
-        ("arm.rs", include_bytes!("arm.rs").as_slice()),
-        ("firmware.rs", include_bytes!("firmware.rs").as_slice()),
-        ("target.rs", include_bytes!("target.rs").as_slice()),
-        ("toolchain.rs", include_bytes!("toolchain.rs").as_slice()),
-        ("components.rs", include_bytes!("components.rs").as_slice()),
-        ("loader.rs", include_bytes!("loader.rs").as_slice()),
-    ] {
-        sources.insert(format!("crates/grkit-build/src/{name}"), sha256(bytes));
-    }
-    for (name, bytes) in [
-        (
-            "artwork.rs",
-            include_bytes!("../../grkit-core/src/artwork.rs").as_slice(),
-        ),
-        (
-            "runtime.rs",
-            include_bytes!("../../grkit-core/src/runtime.rs").as_slice(),
-        ),
-        (
-            "abi.rs",
-            include_bytes!("../../grkit-core/src/abi.rs").as_slice(),
-        ),
-        (
-            "menu_text.rs",
-            include_bytes!("../../grkit-core/src/menu_text.rs").as_slice(),
-        ),
-        (
-            "plugins.rs",
-            include_bytes!("../../grkit-core/src/plugins.rs").as_slice(),
-        ),
-    ] {
-        sources.insert(format!("crates/grkit-core/src/{name}"), sha256(bytes));
-    }
-    for (name, bytes) in [
-        (
-            "Cargo.toml",
-            include_bytes!("../../../Cargo.toml").as_slice(),
-        ),
-        (
-            "Cargo.lock",
-            include_bytes!("../../../Cargo.lock").as_slice(),
-        ),
-        (
-            "crates/grkit-build/Cargo.toml",
-            include_bytes!("../Cargo.toml").as_slice(),
-        ),
-        (
-            "crates/grkit-core/Cargo.toml",
-            include_bytes!("../../grkit-core/Cargo.toml").as_slice(),
-        ),
-        (
-            "crates/grkit-core/src/lib.rs",
-            include_bytes!("../../grkit-core/src/lib.rs").as_slice(),
-        ),
-    ] {
-        sources.insert(name.to_owned(), sha256(bytes));
-    }
-    sources
+        .chain(
+            BUILD_SOURCES
+                .iter()
+                .map(|(name, bytes)| (name.to_string(), sha256(bytes))),
+        )
+        .collect()
 }
 
 pub fn materialize_runtime(directory: &Path) -> Result<()> {
@@ -169,6 +159,117 @@ pub fn build_runtime(
     build_image(&image, output, &tools)
 }
 
+/// Build the module `id` from C `sources` into a module file (`grkit_core::grm`).
+/// `directory` must not exist; it receives the objects.
+pub fn build_module(
+    id: &str,
+    version: u32,
+    sources: &[PathBuf],
+    directory: &Path,
+    clang: &str,
+    lld: &str,
+) -> Result<Vec<u8>> {
+    let tools = Toolchain::discover(clang, lld)?;
+    fs::create_dir_all(directory.parent().unwrap_or(Path::new(".")))?;
+    fs::create_dir(directory)
+        .with_context(|| format!("Create new build directory {}", directory.display()))?;
+    let directory = directory.canonicalize()?;
+    let runtime = directory.join("runtime");
+    materialize_runtime(&runtime)?;
+    let sources: Vec<PathBuf> = sources
+        .iter()
+        .map(|source| {
+            source
+                .canonicalize()
+                .with_context(|| format!("Read {}", source.display()))
+        })
+        .collect::<Result<_>>()?;
+    let sources: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+    module::build(
+        id,
+        version,
+        &sources,
+        &runtime.join("sdk"),
+        &directory,
+        &tools,
+    )?
+    .encode()
+}
+
+/// Build the module of `module.toml` in `module_directory` into a module file
+/// (`grkit_core::grm`). `directory` must not exist; it receives the generated
+/// files and the objects. Returns the module ID and the file.
+pub fn build_module_manifest(
+    module_directory: &Path,
+    directory: &Path,
+    clang: &str,
+    lld: &str,
+) -> Result<(String, Vec<u8>)> {
+    let tools = Toolchain::discover(clang, lld)?;
+    fs::create_dir_all(directory.parent().unwrap_or(Path::new(".")))?;
+    fs::create_dir(directory)
+        .with_context(|| format!("Create new build directory {}", directory.display()))?;
+    let directory = directory.canonicalize()?;
+    let runtime = directory.join("runtime");
+    materialize_runtime(&runtime)?;
+    let module = module::build_manifest(
+        &module_directory
+            .canonicalize()
+            .with_context(|| format!("Read {}", module_directory.display()))?,
+        &runtime.join("sdk"),
+        &directory,
+        &tools,
+    )?;
+    Ok((module.id.clone(), module.encode()?))
+}
+
+/// Run the host test of the module in `module_directory` (`test.c`) with the
+/// host compiler `cc`. `directory` must not exist; it receives the build.
+/// Return whether a test ran (`module::test_manifest`).
+pub fn test_module_manifest(module_directory: &Path, directory: &Path, cc: &str) -> Result<bool> {
+    fs::create_dir_all(directory.parent().unwrap_or(Path::new(".")))?;
+    fs::create_dir(directory)
+        .with_context(|| format!("Create new build directory {}", directory.display()))?;
+    let directory = directory.canonicalize()?;
+    let runtime = directory.join("runtime");
+    materialize_runtime(&runtime)?;
+    module::test_manifest(
+        &module_directory
+            .canonicalize()
+            .with_context(|| format!("Read {}", module_directory.display()))?,
+        &runtime.join("sdk"),
+        &directory,
+        Path::new(cc),
+    )
+}
+
+/// The export table of the core: for each service of `grkit_core::grm::EXPORTS`,
+/// the hash of its name and the offset of its code from the start of the tail.
+fn core_exports(
+    layout: &components::Layout,
+    components: &[&components::Component],
+) -> Result<Vec<(u32, u32)>> {
+    grkit_core::grm::EXPORTS
+        .iter()
+        .map(|&(name, symbol)| {
+            let (base, offset) = components
+                .iter()
+                .find_map(|c| {
+                    c.symbols
+                        .get(symbol)
+                        .map(|offset| (c.patches[0].address, *offset))
+                })
+                .with_context(|| {
+                    format!("The core has no symbol {symbol} for the export {name}")
+                })?;
+            Ok((
+                grkit_core::grm::symbol_hash(name),
+                base - layout.tail.0 + offset,
+            ))
+        })
+        .collect()
+}
+
 /// Internal build entry; only the public firmware entry verifies release identity.
 fn build_image(
     image: &firmware::FirmwareImage,
@@ -185,25 +286,31 @@ fn build_image(
     let runtime = objects.join("runtime");
     materialize_runtime(&runtime)?;
     fs::write(runtime.join("hooks.h"), components::hooks_header(image)?)?;
-    // A target without a layout gets the loader and the installer only.
     let mut built: Vec<(&str, components::Component)> = Vec::new();
-    if let Some(layout) = image.target.layout {
-        if let Some(region) = layout.processing {
-            let component =
-                components::processing(&objects, &runtime, image, tools, layout, region)?;
-            built.push(("processing", component));
-        }
-        let component = components::menu(&objects, &runtime, image, tools, layout)?;
-        built.push(("menu", component));
-        if let Some(region) = layout.framing {
-            let component = components::framing(&objects, &runtime, image, tools, layout, region)?;
-            built.push(("framing", component));
-        }
+    if image.target.family.processing_source.is_some() {
+        let component = components::processing(&objects, &runtime, image, tools)?;
+        built.push(("processing", component));
     }
+    let mut menu = components::menu(&objects, &runtime, image, tools)?;
+    let menu_base = menu.patches[0].address;
+    let framing = components::framing(
+        &objects,
+        &runtime,
+        image,
+        tools,
+        menu_base + menu.code_size as u32,
+    )?;
+    // The menu can grow by the space that Framing leaves free at the end of
+    // the tail.
+    menu.limit = menu.code_size + (framing.limit - framing.code_size);
+    built.push(("menu", menu));
+    built.push(("framing", framing));
     let components: Vec<_> = built.iter().map(|(_, component)| component).collect();
     // The installer publishes every code payload before any firmware change.
     let mut patches: Vec<_> = components.iter().map(|c| c.patches[0].clone()).collect();
+    let mut first = Vec::new();
     for component in &components {
+        first.push(patches.len());
         patches.extend_from_slice(&component.patches[1..]);
     }
     let relocations = components
@@ -211,9 +318,28 @@ fn build_image(
         .enumerate()
         .flat_map(|(index, c)| c.relocations.iter().map(move |offset| (index, *offset)))
         .collect();
+    // Component patch 0 is the payload; patch j > 0 follows the payloads.
+    let references = components
+        .iter()
+        .enumerate()
+        .flat_map(|(index, c)| {
+            let first = first[index];
+            c.references.iter().map(move |reference| Reference {
+                patch: if reference.patch == 0 {
+                    index
+                } else {
+                    first + reference.patch - 1
+                },
+                ..*reference
+            })
+        })
+        .collect();
+    let exports = core_exports(image.target.layout, &components)?;
     let plan = PatchPlan {
         patches,
         relocations,
+        references,
+        exports,
     };
     validate_plan(&plan)?;
     let generated = loader::header(&plan, image, env!("CARGO_PKG_VERSION"))?;
@@ -269,9 +395,8 @@ fn build_image(
         fs::create_dir_all(destination.parent().unwrap())?;
         fs::write(destination, bytes)?;
     }
-    let manifest = json!({
-        "schema_version": 1, "version": env!("CARGO_PKG_VERSION"), "target": image.target.name,
-        "profile": "production", "startup_activation": "Off",
+    let Value::Object(records) = json!({
+        "schema_version": 1, "version": env!("CARGO_PKG_VERSION"),
         "toolchain": tools.manifest(), "source_revision": null, "source_dirty": null,
         "firmware_sha256": image.sha256, "decoded_firmware_sha256": image.decoded_sha256,
         "source_sha256": source_hashes(), "generated_header_sha256": sha256(generated.as_bytes()),
@@ -279,12 +404,16 @@ fn build_image(
             json!({"sha256": sha256(&component.patches[0].after), "size": component.code_size, "limit": component.limit})))
             .collect::<serde_json::Map<_, _>>(),
         // The firmware changes of each extension point, which a package
-        // without its plugins does not make.
+        // without its modules does not make.
         "points": components::Point::ALL.iter().map(|point| (point.name().to_owned(),
             json!(plan.patches.iter().filter(|patch| patch.points == point.bit()).count())))
             .collect::<serde_json::Map<_, _>>(),
-        "files": files.iter().map(|(path, bytes)| json!({"path": path, "size": bytes.len(), "sha256": sha256(bytes)})).collect::<Vec<_>>()
-    });
+    }) else {
+        unreachable!("an object literal")
+    };
+    let mut manifest = grkit_core::packaging::manifest(image.target.name, &files);
+    manifest.extend(records);
+    let manifest = Value::Object(manifest);
     fs::write(
         output.join("build.json"),
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),

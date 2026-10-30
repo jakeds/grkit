@@ -1,140 +1,114 @@
-# GRKit
+# Soft — Ricoh GR
 
-## Soft edition — experimental Ricoh GR builder
+Soft.16 integrates upstream GRKit through `f300328` (2026-10-30). It keeps Soft's custom icons, 5% controls, black lift, roll-off, warm split tones, seven-colour edits, bloom, halation, small mono date stamps and FP100C crop.
 
-Soft.15 adds III/IIIx Grain → Strength / Boost / Pattern. Boost is Default, 1.5x or 2x; Pattern is Moment or Fixed seed. Defaults preserve the prior amplitude and moment-seed behaviour. Off bypasses overrides; invalid saved values fall back to defaults. Fixed uses the same seed per native generator call and does not promise identical final JPEGs across different scenes or processing. GR IV keeps native strength controls; unverified overrides are not offered. Defaults are verified against Soft.14 native noise output under ARM emulation; physical camera testing remains outstanding.
+- Main menu: **MENU → Customize → Soft**. ADJ remains available; Right opens, Left returns, OK applies without closing it.
+- Faster upstream loader: plans remain in RAM and the previous working core is tried first. Actual startup time needs a camera measurement.
+- III/IIIx Grain: Strength / Size / Boost / Pattern. Size defaults to **Default**, retaining Soft.15's native noise path. Auto / Small / Medium / Large opt into the new size generator. Boost Default and Pattern Moment retain the previous amplitude and seed behaviour; Fixed seed is opt-in.
+- GR IV offers Strength and Size; III-only seed controls are omitted. The public builder currently packages the rebuilt GR IV 1.11 / Monochrome 1.00 runtime. Newer upstream IV targets remain in source but aren't advertised by this builder until rebuilt against those official firmware inputs.
+- Every new effect starts Off or Neutral. Existing Soft.15 settings have a one-time conversion of percentages, crop IDs, date appearances, split tones and packed colour edits.
+- [Builder](https://soft-gr.jakeds372351.chatgpt.site/) · [Source](https://github.com/jakeds/grkit/tree/jake/soft16-upstream-menu)
 
-[Open the Soft builder](https://soft-gr.jakeds372351.chatgpt.site) · [Soft source branch](https://github.com/jakeds/grkit/tree/jake/gr3x-seeded-grain)
+### Updating from Soft.15
 
-Soft.14 recalibrates fine Black lift to a 48/255 maximum floor, fading smoothly to neutral by 128/255. Split toning has four times the former endpoint range and symmetric rounding; Warm Cream at 5% now produces a nonzero tint. Existing percentage settings become stronger; Off and legacy fixed-strength codes retain their old responses. Grain is unchanged.
+Back up the card. Merge the new `SD_ROOT/SCRIPT` folder onto the existing `SCRIPT`, replacing files with the same names. Retain `SCRIPT/PLUGINS/STATE.TXT` for the first successful start; the installer reads it once and saves converted values in `GRKIT/STATE.TXT`. Do not copy the old STARTUP.TTL over the new one. Once the new state exists, the old `SCRIPT/PLUGINS` folder can be removed. Future updates replace `SCRIPT` and retain `GRKIT`. SD-script activation is not repeated.
 
-Choose your camera, film looks and controls, then download an SD-card package. The photo previewer has been removed. Six everyday looks are selected by default; the rest are optional. New effects start off or neutral on a fresh setup; existing camera settings are retained.
+### Validation boundary
 
-| Camera, including its HDF model | Required firmware | Runtime |
-| --- | --- | --- |
-| GR III | 2.10 | gr3-2.10 |
-| GR IIIx | 1.60 | gr3-2.10 |
-| GR IV | 1.11 | gr4-1.11 |
-| GR IV Monochrome | 1.00 | gr4-1.11, with Image Control excluded |
-
-III-series grain uses moment-derived seeds and 5% amplitude steps. GR IV uses native Weak/Medium/Strong grain. III-series custom crops include 6x7, 5:4, FP100C and 4:3; GR IV uses its native aspect controls and the upstream XPan extension. III-series Soft can borrow an Image Control ADJ slot; on IV select the extra Soft ADJ entry.
-
-This edition has software/package validation but its custom features have not been verified on every physical camera model. GR IV uses a separate compiled runtime, with expanded, non-overlapping regions in the executable RTOS tail below the data mapping. Upstream's tested status does not establish hardware validation of Soft. No GR II or older model support is implied.
-
-The seed is sampled when grain processing runs, not at the exact shutter instant. It combines the native clock value, local calendar time and a counter since startup. It is not saved in image metadata and is not guaranteed globally unique. Re-developing a RAW generates new grain.
-
-Install only from the complete package for your exact model and firmware. The website gives model-specific activation filenames and one-time SD-script instructions. With the camera off, deleting SCRIPT stops loading Soft; SD-script activation itself remains enabled.
-
-Offline grain verification: `python tools/verify-gr3x-native-grain.py /private/path/to/gr3x-160-rtos.bin build/soft-runtime-final/objects/module-framing.elf` (requires Python Unicorn). Keep official firmware, decoded bytes and build objects out of Git.
+Software checks and ARM emulation do not prove physical-camera behaviour or final JPEG quality. The default III/IIIx noise bytes are compared against Soft.15 under emulation. Hardware validation remains outstanding. No replacement firmware is flashed.
 
 ---
 
-English | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md) | [日本語](README.ja.md)
+# GRKit
+
+English | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 [![Tests](https://github.com/ahonn/grkit/actions/workflows/tests.yml/badge.svg)](https://github.com/ahonn/grkit/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-GRKit adds film looks and shooting tools to RICOH GR cameras. It loads from the SD card and does not write the camera firmware.
+GRKit adds film looks, XPan and other crops, date stamps, and grain to RICOH GR III, GR IIIx, and GR IV. It runs from the SD card and never writes to the firmware. Take the card out and the camera is back to stock.
 
-![The GRKit page in the ADJ menu](https://github.com/ahonn/grkit/raw/main/resources/images/grkit-root.png)
+<p>
+  <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-root.jpg" alt="The GRKit page in the ADJ menu" width="49%">
+  <img src="https://github.com/ahonn/grkit/raw/main/resources/images/grkit-menu.jpg" alt="The GRKit section in the Customize tab of MENU" width="49%">
+</p>
 
 Photo: [Snow in Akihabara](https://www.flickr.com/photos/cafetricot/51803682755/) by nagi usano, [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/).
 
 ## Features
 
-Soft uses the first ADJ slot assigned to Image Control. It adds these controls:
+Press the ADJ lever while shooting and pick the sixth item, GRK.
 
-- **Image Control**: 16 film looks, such as Portra 400, Velvia 100, and Tri-X 400. The viewfinder previews the look.
-- **Framing (GR III/IIIx)**: Native, 6x7 (7:6), 5:4, FP100C, 4:3 and 16:9. XPan is absent from the new menu. Custom dimensions and playback classification are experimental.
-- **Guides**: thirds, center, golden ratio, or diagonal lines.
-- **Date Stamp**: an orange date on the photo, like a film camera's data back.
-- **Grain**: native film grain in 5% amplitude steps.
+- **Film Look**: Portra 400, Velvia 100, Tri-X 400, and more, with a live preview. You can also import your own `.cube` LUT or Lightroom preset on [grkit.app](https://grkit.app). Each look is fitted from an open-source film LUT, so it comes close to the original but isn't identical ([sources](effects/NOTICE.md)).
+- **Framing**: XPan, 2.35:1, 16:9, 4:3, 5:4, 7:6, and 1:1, with a mask or frame lines in the viewfinder.
+- **Guides**: thirds, center, golden ratio, or diagonals.
+- **Date Imprint**: the date on the photo in classic, GR1s dot-matrix, or GR II style.
+- **Grain**: film grain in four strengths and four sizes (Auto, Small, Medium, Large).
 
-Use Left to return to the parent menu, Right to open a submenu, and OK to apply a value without closing ADJ. There are no Back or version rows. Date Stamp separates Format from Appearance. Split Toning separates Preset from Strength, with warm presets first. Strengths are Off or 5–100% in 5% steps; saturation uses signed 5% steps, hue and brightness use signed steps of 5. Existing stored controls remain readable.
-
-You select the modules when you make a package. The menu shows only those modules.
+GRKit takes about 8 to 10 seconds to load after power-on, and longer on GR IV or on the first start after an install or update. Until then, the camera uses its own settings. All the settings are in the GRKit section at the end of the Customize tab in MENU. To write your own module, see [Writing a module](docs/modules.md).
 
 ## Supported cameras
 
-| Camera | Firmware | Status |
+| Camera | Tested on a camera | Supported |
 | --- | --- | --- |
-| RICOH GR III | 2.10 | Tested on a camera |
-| RICOH GR III HDF | 2.10 | Not tested on a camera |
-| RICOH GR IIIx | 1.60 | Not tested on a camera |
-| RICOH GR IIIx HDF | 1.60 | Not tested on a camera |
-| RICOH GR IV, GR IV HDF | 1.11 | Experimental, not tested on a camera. Framing offers only XPan. |
+| GR III, GR III HDF | 2.10, 2.20 | — |
+| GR IIIx, GR IIIx HDF | 1.60, 1.70 | — |
+| GR IV, GR IV HDF | 1.11, 1.20 | — |
+| GR IV Monochrome | 1.00 | 1.10 |
 
-Each HDF model runs the firmware of its base camera and uses the same package. Other models and firmware versions are not supported. To see the firmware version, open the camera menu.
+GR IV Monochrome has no Film Look. Other models and firmware versions aren't supported. If GRKit doesn't load on a supported camera, see the [firmware dump guide](resources/DUMP.md).
 
 > [!WARNING]
 > GRKit is experimental. Use it at your own risk.
-> GRKit changes the camera memory only until the camera turns off. The installation turns on the camera's SD script setting, and this setting stays on.
-> If GRKit fails, the camera can stop during startup. Read the [recovery guide](resources/RECOVERY.md) before you install GRKit.
+> Installing it turns on the camera's SD script setting, which stays on until you turn it off. If GRKit fails, the camera can hang at startup, so read the [recovery guide](resources/RECOVERY.md) first.
 
 ## Install
 
-For this edition, use the [Soft builder](https://soft-gr.jakeds372351.chatgpt.site). Choose your looks and controls, then download `Soft-GRIIIx.zip`. The original upstream builder is [grkit.app](https://grkit.app).
+Pick your camera, modules, and effects on [grkit.app](https://grkit.app), then either:
 
-Each package contains the installation guide for its camera as a PDF, in the language that you select. The recovery guide is at its end. The sources are:
+- **Write to the SD card** from Chrome or Edge on a computer. The site can also update or uninstall GRKit and add or remove modules and effects.
+- **Download GRKit.zip** and follow the PDF guide inside it ([GR III and GR IIIx](resources/INSTALLATION.md), [GR IV](resources/INSTALLATION-GR4.md)).
 
-- [GR III, GR IIIx, and their HDF models](resources/INSTALLATION.md)
-- [GR IV and GR IV HDF](resources/INSTALLATION-GR4.md)
+The first time only, hold MENU while you turn the camera on. To update from a ZIP, replace the `SCRIPT` folder on the card. Your settings stay in `GRKIT`. Formatting the card removes GRKit, so copy `GRKIT` to a computer first.
 
-To remove GRKit, turn the camera off and delete the `SCRIPT` folder from the card.
+If GRK doesn't show up, check the FAQ on [grkit.app](https://grkit.app). If that doesn't help, send `GRKIT/REPORT.TXT`, `GRKIT/BOOT.TXT`, and `SCRIPT/GRKIT/INSTALL.ERR` (if it exists) in a [device report](https://github.com/ahonn/grkit/issues/new?template=device-report.yml).
 
 ## Build from source
 
-You need Rust 1.92 or later, Clang and LLD with ARM support, and the official firmware file from Ricoh. The repository does not contain firmware.
+You need Rust 1.92 or later, Clang and LLD with ARM support, and the official Ricoh firmware file, which this repository doesn't include.
 
 ```sh
 cargo install --path crates/grkit-cli --locked
 grkit effects build --source effects --out build/effects
 grkit build --target gr3-2.10 --firmware firmware/fwdc239b.bin --out build/runtime
+for module in modules/*/; do grkit module build --dir "$module" --out "build/modules/$(basename "$module").GRM"; done
 sh .github/scripts/install-guide-tools.sh build/guide-tools
 sh .github/scripts/build-guides.sh grkit build/guide-tools build/guides
-grkit package --build build/runtime --effects build/effects --guide build/guides/gr3/en.pdf --out dist/GRKit.zip
+grkit package --build build/runtime --effects build/effects $(for m in build/modules/*.GRM; do printf -- '--module %s ' "$m"; done) \
+  --guide build/guides/gr3/en.pdf --out dist/GRKit.zip
 grkit verify dist/GRKit.zip
 ```
 
-- Guides: `install-guide-tools.sh` downloads Typst and the Noto Sans SC, TC, and JP fonts and checks their SHA-256, on Linux x86_64 or macOS arm64. `build-guides.sh` writes `build/guides/<camera>/<language>.pdf`.
-- GR IIIx: package with `--camera gr3x` and `--guide build/guides/gr3x/en.pdf`. The runtime is the same as for GR III.
-- HDF models: package for the base camera, for example `--camera gr3` for GR III HDF.
-- GR IV: build with `--target gr4-1.11` from `fwdc248b.bin`, then package with `--camera gr4` and `--guide build/guides/gr4/en.pdf`.
-- Fewer plugins: add `--plugins` with the plugins to install, for example `--plugins framing,guides`. The installer makes no firmware change for the other plugins. Without `--effects`, the package has no Image Control.
-- Guide language: add `--language zh-Hans`, `--language zh-Hant`, or `--language ja`, and give the guide in that language, for example `build/guides/gr3/zh-Hans.pdf`.
-
-## Repository layout
-
-| Path | Contents |
-| --- | --- |
-| `crates/grkit-core` | Effect formats and package rules, with no platform I/O |
-| `crates/grkit-build` | Runtime builds from the firmware file |
-| `crates/grkit-cli` | The `grkit` command |
-| `crates/grkit-wasm` | Package assembly in the browser |
-| `runtime/` | The code that runs on the camera |
-| `effects/` | The sources of the Image Control effects |
-| `web/` | The site that makes packages in the browser |
-| `resources/` | The installation and recovery guides |
-| `docs/` | The architecture and the release process |
+For other cameras, fewer modules, or other guide languages, see [Build packages](CONTRIBUTING.md#build-packages).
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) for the setup, the tests, and the pull request rules.
-If you test GRKit on a camera, open a device report issue with the result, as a pass or a failure. Reports for GR IIIx, the HDF models, and GR IV are the most useful.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Device reports are welcome whether GRKit worked or not, especially for firmware that hasn't been tested on a camera yet. Send problems, feature ideas, and questions through the [feedback form](https://tally.so/r/Z9jRgB), and you can support the project by [buying me a coffee](https://buymeacoffee.com/yuexunjiang).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Writing a module](docs/modules.md) and the [module reference](docs/module-reference.md)
 - [Release process](docs/releasing.md)
 - [Effects](effects/README.md)
 - [Web site](web/README.md)
 
 ## License
 
-The code is licensed under the [MIT License](LICENSE). Each package contains `LICENSES.md`, which gives the licenses of its files.
+The code is under the [MIT License](LICENSE). Each package includes `LICENSES.md` with the licenses of its files.
 
-- The effects are licensed under CC BY-SA 4.0 or MIT. [effects/NOTICE.md](effects/NOTICE.md) gives the license of each effect.
-- The icon text uses the [Inter](https://github.com/rsms/inter) typeface under the [SIL Open Font License 1.1](crates/grkit-core/assets/Inter-LICENSE.txt).
-- The effect fit is ported from [gr3-film-mods](https://github.com/idontknownihil/gr3-film-mods) under the [MIT License](crates/grkit-core/GR3_FILM_MODS_LICENSE.txt).
+- The effects are under CC BY-SA 4.0 or MIT. See [effects/NOTICE.md](effects/NOTICE.md).
+- The menu and live view text uses [Roboto Condensed](https://github.com/googlefonts/roboto-classic) under the [SIL Open Font License 1.1](crates/grkit-core/assets/RobotoCondensed-LICENSE.txt).
+- The effect fitting is ported from [gr3-film-mods](https://github.com/idontknownihil/gr3-film-mods) under the [MIT License](crates/grkit-core/GR3_FILM_MODS_LICENSE.txt).
 
-RICOH and GR are trademarks of Ricoh Company, Ltd. Film names are trademarks of their owners. GRKit is an independent project. It is not affiliated with, endorsed by, or supported by Ricoh or by a film manufacturer.
+RICOH and GR are trademarks of Ricoh Company, Ltd. Film names are trademarks of their respective owners. GRKit is an independent project and is not affiliated with Ricoh or any film manufacturer.

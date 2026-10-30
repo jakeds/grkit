@@ -1,12 +1,40 @@
-use grkit_core::{effects, packaging, runtime};
+use grkit_core::{effects, testing};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// The module files of the official modules, for the packages of the tests.
+fn official_modules() -> Vec<String> {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("official-modules");
+    fs::create_dir_all(&directory).unwrap();
+    grkit_core::modules::OFFICIAL
+        .iter()
+        .map(|official| {
+            // Tests run in parallel and share the directory: write each file
+            // under another name and rename it, so that no grkit process
+            // reads a file while a test rewrites it.
+            let path = directory.join(format!("{}.GRM", official.id));
+            let mut file = tempfile::NamedTempFile::new_in(&directory).unwrap();
+            std::io::Write::write_all(&mut file, &testing::module(official.id)).unwrap();
+            file.persist(&path).unwrap();
+            text(&path).to_owned()
+        })
+        .collect()
+}
+
+/// Run grkit. A `package` command without `--module` gets the official modules.
 fn run(args: &[&str]) -> Output {
+    let mut args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    if args.first().is_some_and(|command| command == "package")
+        && !args.iter().any(|arg| arg == "--module")
+    {
+        for module in official_modules() {
+            args.extend(["--module".to_owned(), module]);
+        }
+    }
     Command::new(env!("CARGO_BIN_EXE_grkit"))
-        .args(args)
+        .args(&args)
         .output()
         .unwrap()
 }
@@ -76,22 +104,13 @@ fn fixture(root: &Path) -> (PathBuf, PathBuf) {
         "--out",
         text(&effects),
     ]);
-    let mut binary = vec![0; 52];
-    binary[..6].copy_from_slice(b"\x7fELF\x01\x01");
-    binary[16..20].copy_from_slice(b"\x02\x00\x28\x00");
-    let files = runtime::runtime_files(&binary);
+    let (manifest, files) = testing::build("gr3-2.10");
     for (name, bytes) in &files {
         let path = build.join("sd").join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
     }
-    let manifest = json!({"profile":"production", "target":"gr3-2.10", "startup_activation":"Off",
-        "files": files.iter().map(|(name,bytes)|json!({"path":name,"size":bytes.len(),"sha256":packaging::sha256(bytes)})).collect::<Vec<_>>()});
-    fs::write(
-        build.join("build.json"),
-        packaging::json_bytes(&manifest).unwrap(),
-    )
-    .unwrap();
+    fs::write(build.join("build.json"), manifest).unwrap();
     (build, effects)
 }
 
@@ -122,7 +141,7 @@ fn effect_compilation_is_independent_of_target_capacity() {
     let empty = tmp.path().join("empty");
     assert!(compile(&input, &empty).status.success());
     assert_eq!(fs::read_dir(empty).unwrap().count(), 0);
-    for index in 0..21 {
+    for index in 0..41 {
         write_definition(&input, &format!("custom-{index:04}"));
     }
     let output = tmp.path().join("compiled");
@@ -134,9 +153,9 @@ fn effect_compilation_is_independent_of_target_capacity() {
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&result.stdout).unwrap()["effects"],
-        21
+        41
     );
-    assert_eq!(fs::read_dir(&output).unwrap().count(), 21);
+    assert_eq!(fs::read_dir(&output).unwrap().count(), 41);
 
     let (build, _) = fixture(&tmp.path().join("package-input"));
     let archive = tmp.path().join("overflow.zip");
@@ -152,7 +171,7 @@ fn effect_compilation_is_independent_of_target_capacity() {
         text(&archive),
     ]);
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("at most 20"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("at most 40"));
     assert!(!archive.exists());
 }
 
@@ -275,8 +294,12 @@ fn package_roundtrip_and_output_ownership() {
         text(&zip),
     ];
     let packaged = success(&args);
-    // Ten runtime and document entries, then one per effect.
-    assert_eq!(packaged["entries"], 10 + source_count());
+    // Eleven runtime, package list, and document entries, the five official
+    // modules, then one per effect.
+    assert_eq!(
+        packaged["entries"],
+        11 + grkit_core::modules::OFFICIAL.len() + source_count()
+    );
     assert_eq!(success(&["verify", text(&zip)])["effects"], source_count());
     let before = fs::read(&zip).unwrap();
     assert!(!run(&args).status.success());
@@ -321,7 +344,7 @@ fn package_targets_the_selected_camera() {
     assert_eq!(packaged["language"], "en");
     let verified = success(&["verify", text(&zip)]);
     assert_eq!(verified["camera"], "gr3x");
-    assert_eq!(verified["target"], "gr3-2.10");
+    assert_eq!(verified["targets"], serde_json::json!(["gr3-2.10"]));
     // The language names the guide.
     let chinese = tmp.path().join("zh-Hans.zip");
     let packaged = success(&[
@@ -367,9 +390,17 @@ fn package_targets_the_selected_camera() {
 }
 
 #[test]
-fn package_selects_plugins_and_may_omit_effects() {
+fn package_installs_the_given_modules() {
     let tmp = tempfile::tempdir().unwrap();
     let (build, effects) = fixture(tmp.path());
+    let modules = tmp.path().join("modules");
+    fs::create_dir(&modules).unwrap();
+    let module = |id: &str| {
+        let path = modules.join(format!("{id}.GRM"));
+        fs::write(&path, testing::module(id)).unwrap();
+        text(&path).to_owned()
+    };
+    let (imgctl, date) = (module("FILMLOOK"), module("DATE"));
     let zip = tmp.path().join("selected.zip");
     let packaged = success(&[
         "package",
@@ -379,53 +410,57 @@ fn package_selects_plugins_and_may_omit_effects() {
         text(&build),
         "--effects",
         text(&effects),
-        "--plugins",
-        "image-control,framing,grain",
+        "--module",
+        &imgctl,
+        "--module",
+        &date,
         "--out",
         text(&zip),
     ]);
-    // The plugin file is one more entry.
-    assert_eq!(packaged["entries"], 11 + source_count());
-    assert_eq!(
-        packaged["plugins"],
-        json!(["image-control", "framing", "grain"])
-    );
+    assert_eq!(packaged["entries"], 13 + source_count());
+    assert_eq!(packaged["modules"], json!(["DATE", "FILMLOOK"]));
     let verified = success(&["verify", text(&zip)]);
-    assert_eq!(
-        verified["plugins"],
-        json!(["image-control", "framing", "grain"])
-    );
+    assert_eq!(verified["modules"], json!(["DATE", "FILMLOOK"]));
 
-    // Without effects, Image Control has nothing to show, so another plugin must stay.
-    let framing_only = tmp.path().join("framing.zip");
+    // Without effects, Date Imprint alone shows a menu.
+    let stamp_only = tmp.path().join("stamp.zip");
     let packaged = success(&[
         "package",
         "--guide",
         GUIDE,
         "--build",
         text(&build),
-        "--plugins",
-        "framing",
+        "--module",
+        &date,
         "--out",
-        text(&framing_only),
+        text(&stamp_only),
     ]);
-    assert_eq!(packaged["entries"], 11);
-    assert_eq!(success(&["verify", text(&framing_only)])["effects"], 0);
-    for plugins in ["image-control", "hdr", "guides,guides"] {
+    assert_eq!(packaged["entries"], 12);
+    assert_eq!(success(&["verify", text(&stamp_only)])["effects"], 0);
+    // Image Control alone without effects, effects without Image Control, a
+    // module twice, and a missing module file show nothing or fail.
+    let missing = text(&modules.join("NONE.GRM")).to_owned();
+    let effects = text(&effects).to_owned();
+    for case in [
+        vec!["--module", imgctl.as_str()],
+        vec!["--module", date.as_str(), "--effects", effects.as_str()],
+        vec!["--module", date.as_str(), "--module", date.as_str()],
+        vec!["--module", missing.as_str()],
+    ] {
         let rejected = tmp.path().join("rejected.zip");
-        let output = run(&[
+        let mut args = vec![
             "package",
             "--guide",
             GUIDE,
             "--build",
             text(&build),
-            "--plugins",
-            plugins,
             "--out",
             text(&rejected),
-        ]);
-        assert!(!output.status.success(), "{plugins}");
-        assert!(!rejected.exists(), "{plugins}");
+        ];
+        args.extend(&case);
+        let output = run(&args);
+        assert!(!output.status.success(), "{case:?}");
+        assert!(!rejected.exists(), "{case:?}");
     }
 }
 
@@ -645,7 +680,7 @@ fn imports_a_cube_into_a_buildable_effect_without_overwriting() {
     assert_eq!(failed.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&failed.stderr).contains("already exists"));
     assert_eq!(fs::read(&path).unwrap(), written);
-    assert!(!import(&cube, &firmware, "bad-v1", "AB", &effects)
+    assert!(!import(&cube, &firmware, "bad-v1", "ab", &effects)
         .status
         .success());
     assert!(!effects.join("bad-v1").exists());
@@ -662,7 +697,7 @@ fn imports_a_cube_into_a_buildable_effect_without_overwriting() {
     assert_eq!(built["effects"], 1);
     let name = effects::filename("warm-v1").unwrap();
     let (effect, _) = effects::decode(&fs::read(compiled.join(name)).unwrap()).unwrap();
-    assert_eq!(effect["matrix"], definition["matrix"]);
+    assert_eq!(effect.to_json()["matrix"], definition["matrix"]);
 }
 
 #[test]
@@ -768,6 +803,14 @@ fn effect_publish_writes_the_site_catalog() {
     assert_eq!(result["target"], "gr3-2.10");
     assert_eq!(result["effects"], source_count());
     let catalog = effects::parse_json(&fs::read(out.join("catalog.json")).unwrap()).unwrap();
+    // The table that `effects import` reads from the same firmware.
+    let base: Vec<u16> = catalog["base_gamma"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| u16::try_from(v.as_u64().unwrap()).unwrap())
+        .collect();
+    assert_eq!(grkit_core::site::base_gamma(&base).unwrap()[8], 7552);
     let compiled = tmp.path().join("compiled");
     compile(&source(), &compiled);
     for entry in catalog["effects"].as_array().unwrap() {
@@ -786,16 +829,91 @@ fn effect_publish_writes_the_site_catalog() {
 fn guides_writes_one_typst_source_for_each_camera_and_language() {
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("guides");
-    assert_eq!(success(&["guides", "--out", text(&out)])["guides"], 12);
+    assert_eq!(success(&["guides", "--out", text(&out)])["guides"], 15);
     let source = fs::read_to_string(out.join("gr3x/zh-Hans/guide.typ")).unwrap();
-    assert!(source.contains("仅适用于 RICOH GR IIIx 和 GR IIIx HDF 固件 1.60。"));
-    assert!(source.contains("GRKit 尚未在 GR IIIx HDF 真机上测试。"));
+    assert!(source.contains("仅适用于 RICOH GR IIIx 和 GR IIIx HDF 固件 1.60 或 1.70。"));
     assert!(source.contains("#link(<recovery>)") && source.contains("= 恢复 <recovery>"));
-    assert!(out.join("gr3x/zh-Hans/images/grkit-root.png").is_file());
+    assert!(out.join("gr3x/zh-Hans/images/grkit-root.jpg").is_file());
     assert!(out.join("gr3x/zh-Hans/images/modeset.png").is_file());
     // The GR IV guides show the Mode Set screen but no GR III menu screenshot.
     assert!(out.join("gr4/en/images/modeset.png").is_file());
-    assert!(!out.join("gr4/en/images/grkit-root.png").exists());
+    assert!(!out.join("gr4/en/images/grkit-root.jpg").exists());
     // The output must be new.
     assert!(!run(&["guides", "--out", text(&out)]).status.success());
+}
+
+#[test]
+fn cameras_lists_the_runtime_build_of_each_release() {
+    let cameras = success(&["cameras"])["cameras"].clone();
+    let gr3x = cameras
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|camera| camera["id"] == "gr3x")
+        .unwrap();
+    assert_eq!(gr3x["modeset"], "00078490.609");
+    assert_eq!(
+        gr3x["releases"],
+        serde_json::json!([
+            {"firmware": "1.60", "target": "gr3-2.10"},
+            {"firmware": "1.70", "target": "gr3-2.10"},
+        ])
+    );
+}
+
+#[test]
+fn writes_an_identity_hald_without_overwriting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("identity.png");
+    let summary = success(&["effects", "hald", "--level", "4", "--out", text(&out)]);
+    assert_eq!(
+        (summary["level"].as_u64(), summary["side"].as_u64()),
+        (Some(4), Some(64))
+    );
+    let cube = grkit_core::cube::Cube::read(&fs::read(&out).unwrap()).unwrap();
+    assert_eq!(cube.size, 16);
+    let again = run(&["effects", "hald", "--level", "4", "--out", text(&out)]);
+    assert!(!again.status.success());
+    assert!(!run(&[
+        "effects",
+        "hald",
+        "--level",
+        "17",
+        "--out",
+        text(&tmp.path().join("b.png"))
+    ])
+    .status
+    .success());
+}
+
+#[test]
+fn release_plan_builds_each_target_and_packages_each_camera() {
+    let plan = success(&["release-plan"]);
+    let targets: Vec<_> = plan["runtimes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|runtime| runtime["target"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        targets,
+        ["gr3-2.10", "gr4-1.11", "gr4-1.20", "gr4-1.20-0528"]
+    );
+    assert_eq!(plan["runtimes"][2]["zip"], "gr4_v120.zip");
+    assert_eq!(plan["runtimes"][2]["file"], "fwdc248b.bin");
+    assert_eq!(plan["runtimes"][2]["official"], true);
+    // A build that Ricoh does not publish comes only from the private backup.
+    assert_eq!(plan["runtimes"][3]["zip"], "gr4_v120_0528.zip");
+    assert_eq!(plan["runtimes"][3]["file"], "RTOS.BIN");
+    assert_eq!(plan["runtimes"][3]["official"], false);
+    // Each camera has one package, with each of its builds. The names are
+    // those of the release assets.
+    assert_eq!(
+        plan["packages"],
+        serde_json::json!([
+            {"camera": "gr3", "targets": ["gr3-2.10"], "name": "gr3"},
+            {"camera": "gr3x", "targets": ["gr3-2.10"], "name": "gr3x"},
+            {"camera": "gr4", "targets": ["gr4-1.11", "gr4-1.20", "gr4-1.20-0528"], "name": "gr4"},
+        ])
+    );
 }

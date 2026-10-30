@@ -1,251 +1,405 @@
 #ifndef GRKIT_MODULES_H
 #define GRKIT_MODULES_H
-#include "generated/pages.h"
+/* The menu modules, in root order: GRKIT_MODULE_PAGES_MAX slots for the pages of
+   modules (GRKIT_HOST_MODULE_PAGES), then the core Modules row
+   (runtime/manage.h) and the core About row (runtime/about.h). */
 #include "about.h"
-#define ABOUT_MODULE PLUGIN_COUNT
-#define GROUP_FRAME (PLUGIN_COUNT+1U)
-#define GROUP_TONE (PLUGIN_COUNT+2U)
-#define GROUP_TEXTURE (PLUGIN_COUNT+3U)
-#define ARRAY_COUNT(a) (sizeof(a)/sizeof((a)[0]))
-static u32 current_index(volatile u32 *h);
-static u32 menu_back(volatile u32 *h);
-static const u16 *group_text(volatile u32 *h) { return text(h,TEXT_MENU_GROUP_SUMMARY+current_index(h)-GROUP_FRAME); }
-#define GROUP_PAGE {group_text,group_text,about_none,about_label,about_icon,about_checked,about_apply,about_none,0,0,0}
-static const Module modules[]={PLUGIN_PAGES,ABOUT_PAGE,GROUP_PAGE,GROUP_PAGE,GROUP_PAGE};
-#define PLUGIN_ICON (GRKIT_ICON_GRKIT-PLUGIN_TILES)
-GRKIT_MAYBE_UNUSED static u32 module_icon_count(void) {
-    u32 i,n=0;for(i=0;i<ARRAY_COUNT(modules);++i) n+=modules[i].tiles;return n;
+#include "setting_store.h"
+#include "effects.h"
+#include "tone_page.h"
+
+#define MODULE_PAGE(slot) (slot)
+#define MANAGE_MODULE MODULE_PAGE(GRKIT_MODULE_PAGES_MAX)
+#define ABOUT_MODULE (MANAGE_MODULE+1U)
+#define MODULE_TOTAL (ABOUT_MODULE+1U)
+
+static const MenuPage about_module = ABOUT_PAGE;
+
+/* ---- Module pages ----------------------------------------------------------
+   One generic choice page serves each module page (runtime/sdk/grkit.h).
+   menu_page() selects the slot in GRKIT_HOST_MODULE_CHOICE before it returns
+   the page, so get a page again after you get another one. */
+#define CHOICE_ENTRY(h) ((h)+GRKIT_HOST_MODULE_PAGES/4+(h)[GRKIT_HOST_MODULE_CHOICE/4]*3)
+/* GrkitPage fields, and GRKIT_CHOICE_OFF_ROW. */
+#define PAGE_SETTING 8U
+#define PAGE_FLAGS 12U
+#define PAGE_TITLE 16U
+#define PAGE_SUMMARIES 20U
+#define PAGE_LABELS 24U
+#define PAGE_SETTING_ROWS 32U
+#define PAGE_SETTING_LIST 36U
+#define CHOICE_OFF_ROW 1U
+/* GrkitSettingRow fields. */
+#define ROW_SETTING 4U
+#define ROW_LABEL 8U
+#define ROW_VALUES 12U
+#define ROW_SIZE 16U
+/* A word of a module page in the module code. A host test maps it. */
+#ifndef PAGE_WORD
+#define PAGE_WORD(p,o) WORD(p,o)
+#endif
+#include "manage.h"
+static const MenuPage manage_module_page = MANAGE_PAGE;
+static u32 module_pages(volatile u32 *h) {
+    u32 n=h[GRKIT_HOST_MODULE_PAGE_COUNT/4];
+    return n<=GRKIT_MODULE_PAGES_MAX ? n : 0;
 }
-static u32 module_icon(u32 module,u32 icon) {
-    u32 i,first=PLUGIN_ICON;
-    if(icon<GRKIT_ICON_TILE(0)) return icon;
-    for(i=0;i<module;++i) first+=modules[i].tiles;
-    return first+icon-GRKIT_ICON_TILE(0);
+static u32 choice_value(volatile u32 *h) { return setting_value(h,CHOICE_ENTRY(h)[1]); }
+/* Whether the page has options (GRKIT_CHOICE_OPTIONS). */
+#define CHOICE_OPTIONS 4U
+static u32 choice_options(volatile u32 *h) { return PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_FLAGS)&CHOICE_OPTIONS; }
+static u32 page_listed(volatile u32 *h,u32 slot);
+/* The values of the page that are off in ADJ: a bit each (CORE.ROWS of its
+   module, runtime/manage.h). Off stays on. */
+static u32 choice_hidden(volatile u32 *h) {
+    u32 listed;
+    if(!choice_options(h)) return 0;
+    listed=page_listed(h,h[GRKIT_HOST_MODULE_CHOICE/4]);
+    return listed<MANAGE_MODULES ? manage_hidden_values(h,listed)&~1U : 0;
 }
-static void frame_preview(volatile u32 *h,u32 canvas,u32 movie) {
+/* The rows of a choice page are the values that the camera offers, in the
+   order of the setting (runtime/settings.h: setting_rows), without the
+   values that are off in ADJ. */
+static u32 choice_rows(volatile u32 *h) {
+    u32 handle=CHOICE_ENTRY(h)[1], hidden=choice_hidden(h), n=setting_rows(h,handle), row, rows=0, value;
+    for(row=0;row<n;++row) {
+        value=setting_row_value(h,handle,row);
+        rows+=value>=32 || !(hidden>>value&1);
+    }
+    return rows;
+}
+static u32 choice_row_value(volatile u32 *h,u32 row) {
+    u32 handle=CHOICE_ENTRY(h)[1], hidden=choice_hidden(h), n=setting_rows(h,handle), base, value;
+    for(base=0;base<n;++base) {
+        value=setting_row_value(h,handle,base);
+        if(value<32 && hidden>>value&1) continue;
+        if(!row--) return value;
+    }
+    return 0;
+}
+/* The row of a value, or row 0 for a value that does not show. */
+static u32 choice_value_row(volatile u32 *h,u32 value) {
+    u32 handle=CHOICE_ENTRY(h)[1], hidden=choice_hidden(h), n=setting_rows(h,handle), base, row=0, v;
+    if(value<32 && hidden>>value&1) return 0;
+    for(base=0;base<n;++base) {
+        v=setting_row_value(h,handle,base);
+        if(v==value) return row;
+        row+=v>=32 || !(hidden>>v&1);
+    }
+    return 0;
+}
+/* Text `index` of a text list of the page, in the menu language. */
+static const u16 *choice_text(volatile u32 *h,u32 field,u32 index) {
+    return MENU_TEXT(PAGE_WORD(PAGE_WORD(CHOICE_ENTRY(h)[0],field),(index*GRKIT_TEXT_LANGUAGES+menu_language())*4));
+}
+static u32 choice_tile(volatile u32 *h,u32 n) { return GRKIT_ICON_MODULE_TILE(CHOICE_ENTRY(h)[2]+(PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_FLAGS)&8U ? 0 : n)); }
+static const u16 *choice_title(volatile u32 *h) { return choice_text(h,PAGE_TITLE,0); }
+static const u16 *choice_summary(volatile u32 *h) { return choice_text(h,PAGE_SUMMARIES,choice_value(h)); }
+static const u16 *choice_label(volatile u32 *h,u32 row) { return choice_text(h,PAGE_LABELS,choice_row_value(h,row)); }
+/* The root row shows the tile of the value; a row shows the tile of its
+   value, or Off for value 0. */
+static u32 choice_icon(volatile u32 *h,u32 row) {
+    u32 value;
+    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) return choice_tile(h,choice_value(h));
+    value=choice_row_value(h,row);
+    return !value && PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_FLAGS)&CHOICE_OFF_ROW ? GRKIT_ICON_OFF : choice_tile(h,value);
+}
+static u32 choice_checked(volatile u32 *h,u32 row) { return choice_row_value(h,row)==choice_value(h); }
+static void choice_apply(volatile u32 *h,u32 row) { setting_store(h,CHOICE_ENTRY(h)[1],choice_row_value(h,row)); }
+static u32 choice_committed(volatile u32 *h) { return choice_value_row(h,choice_value(h)); }
+static const MenuPage choice_module={choice_title,choice_summary,choice_rows,choice_label,choice_icon,
+    choice_checked,choice_apply,choice_committed,0,0,0};
+
+/* The rows of the native settings page of a module page. INSTALL writes
+   the setting handle of each row into the row (runtime/install_modules.h). Row 0
+   is the page setting, which can be a used setting such as CORE.ASPECT: its
+   values are the rows of the page. The other rows are settings of the
+   module. */
+static u32 choice_row(volatile u32 *h,u32 row) {
+    return PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_SETTING_LIST)+row*ROW_SIZE;
+}
+static u32 choice_row_handle(volatile u32 *h,u32 row) {
+    return PAGE_WORD(choice_row(h,row),ROW_SETTING);
+}
+static const u16 *choice_row_text(volatile u32 *h,u32 row,u32 field,u32 index) {
+    return MENU_TEXT(PAGE_WORD(PAGE_WORD(choice_row(h,row),field),(index*GRKIT_TEXT_LANGUAGES+menu_language())*4));
+}
+#define CHOICE_SETTING(row) \
+    static const u16 *choice_label_##row(volatile u32 *h) { return choice_row_text(h,row,ROW_LABEL,0); } \
+    static u32 choice_values_##row(volatile u32 *h) { return setting_limit(h,choice_row_handle(h,row)); } \
+    static const u16 *choice_value_##row(volatile u32 *h,u32 value) { return choice_row_text(h,row,ROW_VALUES,value); } \
+    static u32 choice_get_##row(volatile u32 *h) { return setting_value(h,choice_row_handle(h,row)); } \
+    static void choice_set_##row(volatile u32 *h,u32 value) { setting_store(h,choice_row_handle(h,row),value); }
+static const u16 *choice_label_0(volatile u32 *h) { return choice_row_text(h,0,ROW_LABEL,0); }
+static const u16 *choice_value_0(volatile u32 *h,u32 row) {
+    return choice_row_text(h,0,ROW_VALUES,choice_row_value(h,row));
+}
+CHOICE_SETTING(1)
+CHOICE_SETTING(2)
+CHOICE_SETTING(3)
+CHOICE_SETTING(4)
+static const Setting choice_settings[SETTING_ROWS]={
+    {choice_label_0,choice_rows,choice_value_0,choice_committed,choice_apply},
+    {choice_label_1,choice_values_1,choice_value_1,choice_get_1,choice_set_1},
+    {choice_label_2,choice_values_2,choice_value_2,choice_get_2,choice_set_2},
+    {choice_label_3,choice_values_3,choice_value_3,choice_get_3,choice_set_3},
+    {choice_label_4,choice_values_4,choice_value_4,choice_get_4,choice_set_4},
+};
+/* The page setting as the one row of a native value page, for the MENU row
+   of a page without settings rows. Its values are the rows of the page. */
+static const u16 *choice_one_label(volatile u32 *h) { return choice_title(h); }
+static const u16 *choice_one_text(volatile u32 *h,u32 row) { return choice_label(h,row); }
+static const Setting choice_one[SETTING_ROWS]={
+    {choice_one_label,choice_rows,choice_one_text,choice_committed,choice_apply},
+};
+/* Soft ADJ: directory of settings, then a value page. Native MENU uses the
+   same setting handles and text, so no second copy of a value can drift. */
+static u32 soft_stage(volatile u32 *h) {u32 n=h[GRKIT_HOST_SOFT_STAGE/4],rows=PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_SETTING_ROWS);return n<=rows?n:0;}
+static u32 soft_handle(volatile u32 *h) {return choice_row_handle(h,soft_stage(h)-1);}
+static const u16 *soft_title(volatile u32 *h) {u32 stage=soft_stage(h);return stage?choice_row_text(h,stage-1,ROW_LABEL,0):choice_title(h);}
+static u32 soft_rows(volatile u32 *h) {return soft_stage(h)?setting_rows(h,soft_handle(h)):PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_SETTING_ROWS);}
+static u32 soft_value(volatile u32 *h,u32 row) {return setting_row_value(h,soft_handle(h),row);}
+static const u16 *soft_label(volatile u32 *h,u32 row) {u32 stage=soft_stage(h);return stage?choice_row_text(h,stage-1,ROW_VALUES,soft_value(h,row)):choice_row_text(h,row,ROW_LABEL,0);}
+static u32 soft_icon(volatile u32 *h,u32 row) {u32 stage=soft_stage(h);if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT)return GRKIT_ICON_MODULE_TILE(CHOICE_ENTRY(h)[2]);return GRKIT_ICON_MODULE_TILE(CHOICE_ENTRY(h)[2]+(stage?stage:row+1));}
+static u32 soft_checked(volatile u32 *h,u32 row) {return soft_stage(h)&&soft_value(h,row)==setting_value(h,soft_handle(h));}
+static u32 soft_committed(volatile u32 *h) {if(!soft_stage(h))return 0;u32 n=soft_rows(h),value=setting_value(h,soft_handle(h));for(u32 i=0;i<n;++i)if(soft_value(h,i)==value)return i;return 0;}
+static void soft_apply(volatile u32 *h,u32 row) {if(!soft_stage(h)){if(row<soft_rows(h)){h[GRKIT_HOST_SOFT_STAGE/4]=row+1;h[GRKIT_HOST_MENU_CURSOR/4]=soft_committed(h);}return;}if(row<soft_rows(h))setting_store(h,soft_handle(h),soft_value(h,row));}
+static const MenuPage soft_settings_module={soft_title,choice_summary,soft_rows,soft_label,soft_icon,
+    soft_checked,soft_apply,soft_committed,0,0,choice_settings};
+
+static const MenuPage choice_settings_module={choice_title,choice_summary,choice_rows,choice_label,choice_icon,
+    choice_checked,choice_apply,choice_committed,0,0,choice_settings};
+
+/* A page of CORE.TONE gets its rows from the core (runtime/tone.h), and its
+   title from the module. */
+static const MenuPage tone_module={choice_title,tone_summary,tone_rows,tone_label,tone_icon,
+    tone_checked,tone_apply,tone_committed,tone_preview,tone_parameters,0};
+
+/* The page of module `index`. */
+static const MenuPage *menu_page(volatile u32 *h,u32 index) {
+    if(index>=ABOUT_MODULE) return &about_module;
+    if(index==MANAGE_MODULE) return &manage_module_page;
+    h[GRKIT_HOST_MODULE_CHOICE/4]=index;
+    /* Only a registered page has a GrkitPage to read. */
+    if(index>=module_pages(h)) return &choice_module;
+    if(CHOICE_ENTRY(h)[1]==GRKIT_CORE_TONE) return &tone_module;
+    if(PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_SETTING_ROWS)) return PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_FLAGS)&8U ? &soft_settings_module : &choice_settings_module;
+    return &choice_module;
+}
+
+/* The global icon ID of a page's icon result. Module pages give global IDs. */
+static u32 module_icon(u32 module,u32 icon) { (void)module; return icon; }
+/* Whether a module layer paints its committed value on the ADJ canvas. */
+static u32 module_layers_on(volatile u32 *h) {
+    u32 i, n=h[GRKIT_HOST_MODULE_LAYER_COUNT/4];
+    for(i=0;i<n && i<GRKIT_MODULE_LAYERS_MAX;++i) {
+        u32 handle=h[GRKIT_HOST_MODULE_LAYERS/4+i*3+1];
+        if(services_suspended(h,h[GRKIT_HOST_MODULE_LAYERS/4+i*3])) continue;
+        if(handle==0xffffffffU || setting_value(h,handle)) return 1;
+    }
+    return 0;
+}
+
+/* ADJ covers the live-view drawing, so ADJ draws the module layers on its
+   own canvas. A module page shows its highlighted value with the committed
+   values of the others. The page of CORE.ASPECT shows the area of its
+   highlighted ratio, and other pages show the crop that the live view draws.
+   Off ends the drawing, and the canvas stays until a full draw has erased
+   it. The preview names the ADJ controller, not its canvas: when ADJ opens
+   on GRKit, its only refresh runs before ADJ makes the canvas. A change of
+   the preview redraws the canvas, if it exists: a return from a native
+   settings page draws nothing more. */
+#ifndef MENU_PREVIEW_INVALIDATE
+#define MENU_PREVIEW_INVALIDATE(view) CALL1(FW_VIEW_INVALIDATE)(view)
+#endif
+static void frame_preview_set(volatile u32 *h,u32 controller,u32 movie) {
     u32 module=h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE ? h[GRKIT_HOST_MODULE/4] : 0;
-    u32 page=module==PLUGIN_FRAMING || module==PLUGIN_GUIDES;
-    u32 valid=!page || h[GRKIT_HOST_MENU_CURSOR/4]<modules[module].rows(h);
-    if(!valid) page=0;
-    u32 ratio=module==PLUGIN_FRAMING && valid ? frame_code(h[GRKIT_HOST_MENU_CURSOR/4]) : frame_ratio(h);
-    u32 style=module==PLUGIN_GUIDES && valid ? h[GRKIT_HOST_MENU_CURSOR/4] : guide_style(h);
+    u32 slot=module, choice=h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && slot<module_pages(h);
+    u32 ratio=framing_crop(h), handle, value;
+    h[GRKIT_HOST_MODULE_PREVIEW/4]=0;
     if(movie) { h[GRKIT_HOST_FRAME_PREVIEW/4]=0; return; }
-    h[GRKIT_HOST_GUIDE_PREVIEW/4]=style;
-    h[GRKIT_HOST_FRAME_PREVIEW/4]=ratio || style || page ? ratio+1 : 0;
-    h[GRKIT_HOST_FRAME_PREVIEW_CANVAS/4]=canvas;
+    if(choice) {
+        const MenuPage *page=menu_page(h,module);
+        if(page==&soft_settings_module && !soft_stage(h)) choice=0;
+        else {
+            handle=page==&soft_settings_module ? soft_handle(h) : CHOICE_ENTRY(h)[1];
+            value=page==&soft_settings_module ? soft_value(h,h[GRKIT_HOST_MENU_CURSOR/4]) : choice_row_value(h,h[GRKIT_HOST_MENU_CURSOR/4]);
+            h[GRKIT_HOST_MODULE_PREVIEW/4]=handle+1;
+            h[GRKIT_HOST_MODULE_PREVIEW/4+1]=value;
+            if(handle==GRKIT_CORE_ASPECT) ratio=value;
+        }
+    }
+    /* A highlighted Off keeps the canvas for the next row. */
+    h[GRKIT_HOST_FRAME_PREVIEW/4]=ratio || choice || module_layers_on(h) ? ratio+1 : 0;
+    h[GRKIT_HOST_FRAME_PREVIEW_ADJ/4]=controller;
 }
+static void frame_preview(volatile u32 *h,u32 controller,u32 movie) {
+    u32 frame=h[GRKIT_HOST_FRAME_PREVIEW/4], at=h[GRKIT_HOST_FRAME_PREVIEW_ADJ/4];
+    u32 handle=h[GRKIT_HOST_MODULE_PREVIEW/4], value=h[GRKIT_HOST_MODULE_PREVIEW/4+1];
+    u32 canvas=controller ? WORD(controller,ADJ_CANVAS) : 0;
+    frame_preview_set(h,controller,movie);
+    if(canvas && !movie && (frame!=h[GRKIT_HOST_FRAME_PREVIEW/4] || at!=controller ||
+                  handle!=h[GRKIT_HOST_MODULE_PREVIEW/4] || value!=h[GRKIT_HOST_MODULE_PREVIEW/4+1]))
+        MENU_PREVIEW_INVALIDATE(canvas);
+}
+
+/* The listed module of page `slot` (runtime/manage.h), or MANAGE_MODULES. */
+static u32 page_listed(volatile u32 *h,u32 slot) {
+    u32 choice=h[GRKIT_HOST_MODULE_CHOICE/4], listed=MANAGE_MODULES;
+    if(slot<module_pages(h)) {
+        h[GRKIT_HOST_MODULE_CHOICE/4]=slot;
+        listed=manage_of_title(h,PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_TITLE));
+    }
+    h[GRKIT_HOST_MODULE_CHOICE/4]=choice;
+    return listed;
+}
+/* The listed modules that the root of ADJ can show (runtime/manage.h): each
+   with a module page of two rows or more, also while a soft Off stops it.
+   The search reads each module page, so only the menu runs it, when the
+   GRKit section is added and when ADJ Order opens. The text hooks of the
+   page read the result (GRKIT_HOST_ADJ_MODULES). */
+static void manage_adj_refresh(volatile u32 *h) {
+    u32 choice=h[GRKIT_HOST_MODULE_CHOICE/4], mask=0, slot, listed;
+    for(slot=0;slot<module_pages(h);++slot) {
+        listed=page_listed(h,slot);
+        if(listed<MANAGE_MODULES && menu_page(h,MODULE_PAGE(slot))->rows(h)>=2) mask|=1U<<listed;
+    }
+    /* menu_page selects a page: keep the page of the caller. */
+    h[GRKIT_HOST_MODULE_CHOICE/4]=choice;
+    h[GRKIT_HOST_ADJ_MODULES/4]=mask;
+}
+static u32 manage_adj_modules(volatile u32 *h) { return h[GRKIT_HOST_ADJ_MODULES/4]; }
+/* Visible modules as a bit mask: each module page with two rows or more,
+   unless a soft Off stopped its module. A page of CORE.TONE has
+   rows only with effects. Without such a page, About shows alone, so that
+   the root has a row. */
 static u32 visible_modules(volatile u32 *h) {
-    u32 mask=h[GRKIT_HOST_PLUGINS/4]&((1U<<PLUGIN_COUNT)-1);
-    if(!h[GRKIT_HOST_COUNT/4]) mask&=~PLUGIN_NEEDS_EFFECTS;
+    u32 choice=h[GRKIT_HOST_MODULE_CHOICE/4], mask=0, slot, listed;
+    for(slot=0;slot<module_pages(h);++slot) {
+        listed=page_listed(h,slot);
+        if(listed<MANAGE_MODULES && manage_stopped(h,listed)) continue;
+        if(menu_page(h,MODULE_PAGE(slot))->rows(h)>=2) mask|=1U<<MODULE_PAGE(slot);
+    }
+    /* Module management and the version are in the native MENU (runtime/menu.c).
+       About shows only so that the root has a row. */
+    if(!mask) mask=1U<<ABOUT_MODULE;
+    /* menu_page selects a page: keep the page of the caller. */
+    h[GRKIT_HOST_MODULE_CHOICE/4]=choice;
     return mask;
 }
-/* The range selector owns its three parameter pages. Packages can omit any
-   controls; singleton categories become direct entries to avoid a needless level. */
-static u32 category_mask(volatile u32 *h,u32 category) {
-    u32 mask=visible_modules(h),wanted;
-    if(mask>>PLUGIN_COLOUR_RANGE&1) mask&=~((1U<<PLUGIN_COLOUR_SATURATION)|(1U<<PLUGIN_COLOUR_HUE)|(1U<<PLUGIN_COLOUR_BRIGHTNESS));
-    if(category==1) wanted=(1U<<PLUGIN_FRAMING)|(1U<<PLUGIN_GUIDES);
-    else if(category==2) wanted=(1U<<PLUGIN_BLACK_FLOOR)|(1U<<PLUGIN_HIGHLIGHT_ROLLOFF)|(1U<<PLUGIN_SPLIT_TONING)|(1U<<PLUGIN_COLOUR_RANGE)|(1U<<PLUGIN_COLOUR_SATURATION)|(1U<<PLUGIN_COLOUR_HUE)|(1U<<PLUGIN_COLOUR_BRIGHTNESS);
-    else wanted=(1U<<PLUGIN_GRAIN)|(1U<<PLUGIN_BLOOM)|(1U<<PLUGIN_HALATION);
-    return mask&wanted;
-}
-static u32 root_modules(volatile u32 *h) {
-    u32 category=h[GRKIT_HOST_MENU_SECTION/4],mask;
-    if(category) return category_mask(h,category);
-    mask=visible_modules(h)&((1U<<PLUGIN_IMAGE_CONTROL)|(1U<<PLUGIN_DATE_STAMP)|(1U<<PLUGIN_SOFT_SHORTCUT)|(1U<<ABOUT_MODULE));
-    for(category=1;category<=3;++category) {
-        u32 children=category_mask(h,category);
-        mask|=children && (children&(children-1)) ? 1U<<(GROUP_FRAME+category-1) : children;
+/* The root order in `order`, and its length: the module pages in the order
+   of their modules (CORE.POS, runtime/manage.h), which applies at once, then
+   the core rows. */
+static u32 root_order(volatile u32 *h,u32 *order) {
+    u32 n=module_pages(h), keys[GRKIT_MODULE_PAGES_MAX], i, j, t;
+    for(i=0;i<n;++i) {
+        u32 listed=page_listed(h,i);
+        keys[i]=listed<MANAGE_MODULES ? manage_key(h,listed) : 2*MANAGE_DEFAULT_KEY+i;
+        order[i]=MODULE_PAGE(i);
+        for(j=i;j && keys[j-1]>keys[j];--j) {
+            t=keys[j]; keys[j]=keys[j-1]; keys[j-1]=t;
+            t=order[j]; order[j]=order[j-1]; order[j-1]=t;
+        }
     }
-    return mask ? mask : 1U<<ABOUT_MODULE;
+    order[n]=MANAGE_MODULE; order[n+1]=ABOUT_MODULE;
+    return n+2;
 }
-static const u8 browse_order[]={PLUGIN_IMAGE_CONTROL,GROUP_FRAME,PLUGIN_FRAMING,PLUGIN_GUIDES,GROUP_TONE,PLUGIN_BLACK_FLOOR,PLUGIN_HIGHLIGHT_ROLLOFF,PLUGIN_SPLIT_TONING,PLUGIN_COLOUR_RANGE,PLUGIN_COLOUR_SATURATION,PLUGIN_COLOUR_HUE,PLUGIN_COLOUR_BRIGHTNESS,GROUP_TEXTURE,PLUGIN_GRAIN,PLUGIN_BLOOM,PLUGIN_HALATION,PLUGIN_DATE_STAMP,PLUGIN_SOFT_SHORTCUT,ABOUT_MODULE};
+/* The module of a root row, or of the last row for a row past the end. */
 static u32 root_module(volatile u32 *h,u32 row) {
-    u32 mask=root_modules(h),i,last=ABOUT_MODULE;
-    for(i=0;i<ARRAY_COUNT(browse_order);++i) {
-        u32 module=browse_order[i];if(!(mask>>module&1)) continue;
-        if(!row--) return module;last=module;
+    u32 mask=visible_modules(h), order[GRKIT_MODULE_PAGES_MAX+3], n=root_order(h,order), i, last=0;
+    for(i=0;i<n;++i) {
+        if(!(mask>>order[i]&1)) continue;
+        if(!row--) return order[i];
+        last=order[i];
     }
     return last;
 }
+/* The root row of a module, or the number of root rows for MODULE_TOTAL. */
 static u32 root_row(volatile u32 *h,u32 module) {
-    u32 mask=root_modules(h),row=0,i;
-    for(i=0;i<ARRAY_COUNT(browse_order);++i) {
-        u32 item=browse_order[i];if(!(mask>>item&1)) continue;
-        if(item==module) return row;++row;
-    }
+    u32 mask=visible_modules(h), order[GRKIT_MODULE_PAGES_MAX+3], n=root_order(h,order), row=0, i;
+    for(i=0;i<n && order[i]!=module;++i) row+=mask>>order[i]&1;
     return row;
 }
-static u32 root_count(volatile u32 *h) { return root_row(h,ARRAY_COUNT(modules)); }
+static u32 root_count(volatile u32 *h) { return root_row(h,MODULE_TOTAL); }
+/* The module of the current row: the row's module at the root, else the open page. */
 static u32 current_index(volatile u32 *h) {
     return h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? root_module(h,h[GRKIT_HOST_MENU_CURSOR/4]) : h[GRKIT_HOST_MODULE/4];
 }
-static const Module *current_module(volatile u32 *h) { return &modules[current_index(h)]; }
+static const MenuPage *current_module(volatile u32 *h) { return menu_page(h,current_index(h)); }
 static u32 count(volatile u32 *h) {
-    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) return root_count(h);
-    return current_module(h)->rows(h);
+    return h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? root_count(h) : current_module(h)->rows(h);
 }
+/* The page learns that its highlighted row changed, so the page of CORE.TONE
+   can preview the row in the live view. */
 static void highlight(volatile u32 *h) {
-    const Module *module;
-    if(h[GRKIT_HOST_MENU_LEVEL/4]!=MENU_MODULE || h[GRKIT_HOST_MODULE/4]>=PLUGIN_COUNT) return;
-    module=&modules[h[GRKIT_HOST_MODULE/4]];
-    if(h[GRKIT_HOST_MENU_CURSOR/4]>=module->rows(h)) {h[GRKIT_HOST_PREVIEW/4]=0;return;}
+    const MenuPage *module;
+    if(h[GRKIT_HOST_MENU_LEVEL/4]!=MENU_MODULE || h[GRKIT_HOST_MODULE/4]>=MODULE_TOTAL) return;
+    module=menu_page(h,h[GRKIT_HOST_MODULE/4]);
     if(module->highlight) module->highlight(h);
 }
+/* Fn applies to the highlighted row of a page that has native parameters,
+   and to the root row of such a page for its committed row. */
 static u32 parameters_row(volatile u32 *h) {
-    const Module *module;
-    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) return current_index(h)==PLUGIN_IMAGE_CONTROL && image_active_row(h)!=0;
-    if(h[GRKIT_HOST_MENU_LEVEL/4]!=MENU_MODULE || h[GRKIT_HOST_MODULE/4]>=PLUGIN_COUNT) return 0;
-    module=&modules[h[GRKIT_HOST_MODULE/4]];return h[GRKIT_HOST_MENU_CURSOR/4]<module->rows(h) && module->parameters && module->parameters(h);
+    const MenuPage *module;
+    u32 row=h[GRKIT_HOST_MENU_CURSOR/4];
+    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) {
+        module=menu_page(h,root_module(h,row));
+        row=module->committed(h);
+    }
+    else if(h[GRKIT_HOST_MENU_LEVEL/4]!=MENU_MODULE || h[GRKIT_HOST_MODULE/4]>=MODULE_TOTAL) return 0;
+    else module=menu_page(h,h[GRKIT_HOST_MODULE/4]);
+    return module->parameters && module->parameters(h,row);
 }
+/* Each module opens at its committed row. Image Control previews from there. */
 static void menu_open(volatile u32 *h,u32 module) {
-    if(module==PLUGIN_COLOUR_RANGE || module==PLUGIN_DATE_STAMP || module==PLUGIN_SPLIT_TONING || module==PLUGIN_GRAIN) h[GRKIT_HOST_COLOUR_MENU/4]=0;
-    h[GRKIT_HOST_MODULE/4]=module;h[GRKIT_HOST_MENU_LEVEL/4]=MENU_MODULE;
-    h[GRKIT_HOST_MENU_CURSOR/4]=modules[module].committed(h);
+    h[GRKIT_HOST_SOFT_STAGE/4]=0;
+    h[GRKIT_HOST_MODULE/4]=module;
+    h[GRKIT_HOST_MENU_LEVEL/4]=MENU_MODULE;
+    h[GRKIT_HOST_MENU_CURSOR/4]=menu_page(h,module)->committed(h);
 }
+/* ADJ opens at the root. About always shows there, so the root has a row even
+   when no module page is visible. */
 static void menu_start(volatile u32 *h) {
-    h[GRKIT_HOST_MENU_SECTION/4]=0;h[GRKIT_HOST_COLOUR_MENU/4]=0;
-    h[GRKIT_HOST_MENU_LEVEL/4]=MENU_ROOT;h[GRKIT_HOST_MENU_CURSOR/4]=0;h[GRKIT_HOST_MODULE/4]=0;
+    h[GRKIT_HOST_MENU_LEVEL/4]=MENU_ROOT;
+    h[GRKIT_HOST_MENU_CURSOR/4]=0;
+    h[GRKIT_HOST_MODULE/4]=0;
 }
-/* Reopen the same section on the previously used control. */
+/* Each ADJ session opens at the root, on the row of the module that was
+   highlighted or open when the last session ended. */
 static void menu_normalize(volatile u32 *h);
 static void menu_reopen(volatile u32 *h) {
     u32 module=h[GRKIT_HOST_MODULE/4];
-    if((module==PLUGIN_COLOUR_SATURATION || module==PLUGIN_COLOUR_HUE || module==PLUGIN_COLOUR_BRIGHTNESS) && (h[GRKIT_HOST_PLUGINS/4]>>PLUGIN_COLOUR_RANGE&1U)) module=PLUGIN_COLOUR_RANGE;
-    h[GRKIT_HOST_MODULE/4]=module;
-    h[GRKIT_HOST_COLOUR_MENU/4]=0;
     h[GRKIT_HOST_MENU_LEVEL/4]=MENU_ROOT;
-    h[GRKIT_HOST_MENU_CURSOR/4]=root_row(h,module);
+    h[GRKIT_HOST_MENU_CURSOR/4]=module<MODULE_TOTAL && visible_modules(h)>>module&1 ? root_row(h,module) : 0;
     menu_normalize(h);
 }
+/* Whether a page can be open: a visible module. */
+static u32 page_reachable(volatile u32 *h,u32 module) { return visible_modules(h)>>module&1; }
 static void menu_normalize(volatile u32 *h) {
     u32 module=h[GRKIT_HOST_MODULE/4];
-    if(h[GRKIT_HOST_MENU_SECTION/4]>3 || h[GRKIT_HOST_MENU_LEVEL/4]<MENU_ROOT || h[GRKIT_HOST_MENU_LEVEL/4]>MENU_MODULE || module>=ARRAY_COUNT(modules) ||
-       (h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && (module>=PLUGIN_COUNT || !(visible_modules(h)>>module&1) || !modules[module].rows(h)))) menu_start(h);
+    if(h[GRKIT_HOST_MENU_LEVEL/4]<MENU_ROOT || h[GRKIT_HOST_MENU_LEVEL/4]>MENU_MODULE || module>=MODULE_TOTAL ||
+       (h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && (!page_reachable(h,module) || !menu_page(h,module)->rows(h))))
+        menu_start(h);
     if(h[GRKIT_HOST_MENU_CURSOR/4]>=count(h)) h[GRKIT_HOST_MENU_CURSOR/4]=0;
 }
+/* OK on a root row opens its page. A row without a page, such as About, does nothing. */
 static void menu_confirm(volatile u32 *h) {
     menu_normalize(h);
     if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) {
-        u32 module=current_index(h);
-        if(module>=GROUP_FRAME && module<=GROUP_TEXTURE) {
-            h[GRKIT_HOST_MENU_SECTION/4]=module-GROUP_FRAME+1;h[GRKIT_HOST_MENU_CURSOR/4]=0;return;
-        }
-        if(modules[module].rows(h)) menu_open(h,module);
-    } else current_module(h)->apply(h,h[GRKIT_HOST_MENU_CURSOR/4]);
+        u32 module=root_module(h,h[GRKIT_HOST_MENU_CURSOR/4]);
+        if(menu_page(h,module)->rows(h)) menu_open(h,module);
+    }
+    else current_module(h)->apply(h,h[GRKIT_HOST_MENU_CURSOR/4]);
 }
-/* Right opens a child page. Values require OK; Left returns to the parent. */
-static u32 menu_right(volatile u32 *h) {
-    u32 module,row;
-    menu_normalize(h);module=current_index(h);row=h[GRKIT_HOST_MENU_CURSOR/4];
-    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) {
-        if((!modules[module].rows(h) && !(module>=GROUP_FRAME && module<=GROUP_TEXTURE))) return 0;
-    } else if(module==PLUGIN_DATE_STAMP && !stamp_stage(h) && row<2) { /* Format or Appearance. */ }
-    else if(module==PLUGIN_GRAIN && !grain_stage(h) && row<grain_options()) { }
-    else if(module==PLUGIN_SPLIT_TONING && !split_stage(h) && row<2) { }
-    else if(module==PLUGIN_COLOUR_RANGE && row<modules[module].rows(h)) { /* Range or parameter. */ }
-    else return 0;
-    menu_confirm(h);return 1;
-}
+/* Return false at the top level so the caller can restore the stock ADJ page. */
 static u32 menu_back(volatile u32 *h) {
-    u32 module;
-    h[GRKIT_HOST_PREVIEW/4]=0;menu_normalize(h);
-    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) {
-        u32 section=h[GRKIT_HOST_MENU_SECTION/4];if(!section) return 0;
-        h[GRKIT_HOST_MENU_SECTION/4]=0;h[GRKIT_HOST_MENU_CURSOR/4]=root_row(h,GROUP_FRAME+section-1);return 1;
-    }
-    module=h[GRKIT_HOST_MODULE/4];
-    if(module==PLUGIN_GRAIN && grain_stage(h)) {h[GRKIT_HOST_MENU_CURSOR/4]=grain_stage(h)-5;h[GRKIT_HOST_COLOUR_MENU/4]=0;return 1;}
-    if(module==PLUGIN_SPLIT_TONING && split_stage(h)) {h[GRKIT_HOST_MENU_CURSOR/4]=split_stage(h)-3;h[GRKIT_HOST_COLOUR_MENU/4]=0;return 1;}
-    if(module==PLUGIN_DATE_STAMP && stamp_stage(h)) {h[GRKIT_HOST_MENU_CURSOR/4]=stamp_stage(h)-1;h[GRKIT_HOST_COLOUR_MENU/4]=0;return 1;}
-    if(h[GRKIT_HOST_COLOUR_MENU/4]) {
-        if(module==PLUGIN_COLOUR_SATURATION || module==PLUGIN_COLOUR_HUE || module==PLUGIN_COLOUR_BRIGHTNESS) {
-            u32 row=0;while(row<3 && colour_child(h,row)!=module) ++row;
-            h[GRKIT_HOST_MODULE/4]=PLUGIN_COLOUR_RANGE;h[GRKIT_HOST_MENU_CURSOR/4]=row;return 1;
-        }
-        if(module==PLUGIN_COLOUR_RANGE) { h[GRKIT_HOST_COLOUR_MENU/4]=0;h[GRKIT_HOST_MENU_CURSOR/4]=colour_range_value(h);return 1; }
-    }
-    h[GRKIT_HOST_MENU_LEVEL/4]=MENU_ROOT;h[GRKIT_HOST_MENU_CURSOR/4]=root_row(h,module);return 1;
-}
-/* Titles show the parent, and the colour being edited survives down to the
-   value page. Two bounded buffers belong to the existing text allocation. */
-static const u16 *control_name(volatile u32 *h,u32 module) {
-    if(module==PLUGIN_IMAGE_CONTROL) return text(h,TEXT_MENU_LOOKS);
-    if(module==PLUGIN_FRAMING) return text(h,TEXT_MENU_CROP);
-    if(module==PLUGIN_COLOUR_RANGE) return text(h,TEXT_MENU_COLOUR);
-    return modules[module].title(h);
-}
-static u32 append_text(u16 *out,u32 at,const u16 *in) {
-    while(*in && at<GRKIT_SUMMARY_UNITS-1) out[at++]=*in++;
-    out[at]=0;return at;
-}
-static u16 *menu_buffer(volatile u32 *h,u32 index) { return (u16 *)MENU_TEXT(GRKIT_TEXT(h)+GRKIT_TEXT_MENU_PATH+index*GRKIT_SUMMARY_UNITS*2); }
-static u32 path_separator(u16 *out,u32 at) {
-    static const u16 slash[]={' ','/',' ',0};return append_text(out,at,slash);
-}
-static const u16 *menu_heading(volatile u32 *h) {
-    u32 module=current_index(h),section=h[GRKIT_HOST_MENU_SECTION/4],at=0;
-    u16 *out=menu_buffer(h,0);
-    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) {
-        if(!section) return plugins;
-        at=append_text(out,0,plugins);at=path_separator(out,at);
-        append_text(out,at,text(h,TEXT_MENU_GROUP+section-1));return out;
-    }
-    if(module==PLUGIN_GRAIN && grain_stage(h)) {at=append_text(out,0,text(h,TEXT_GRAIN));at=path_separator(out,at);append_text(out,at,grain_title(h));return out;}
-    if(module==PLUGIN_SPLIT_TONING && split_stage(h)) {at=append_text(out,0,text(h,TEXT_SPLIT_TONING));at=path_separator(out,at);append_text(out,at,split_toning_title(h));return out;}
-    if(module==PLUGIN_DATE_STAMP && stamp_stage(h)) {at=append_text(out,0,text(h,TEXT_DATE_STAMP));at=path_separator(out,at);append_text(out,at,stamp_title(h));return out;}
-    if(h[GRKIT_HOST_COLOUR_MENU/4] && (module==PLUGIN_COLOUR_RANGE || module==PLUGIN_COLOUR_SATURATION || module==PLUGIN_COLOUR_HUE || module==PLUGIN_COLOUR_BRIGHTNESS)) {
-        u32 range=colour_range_value(h);
-        if(module==PLUGIN_COLOUR_RANGE) at=append_text(out,0,text(h,TEXT_MENU_COLOUR));
-        else if(range) at=append_text(out,0,text(h,TEXT_COLOUR_RANGE_NAME+range-1));
-        at=path_separator(out,at);
-        append_text(out,at,module==PLUGIN_COLOUR_RANGE && range ? text(h,TEXT_COLOUR_RANGE_NAME+range-1) : control_name(h,module));return out;
-    }
-    if(section) {at=append_text(out,0,text(h,TEXT_MENU_PARENT+section-1));at=path_separator(out,at);}
-    append_text(out,at,control_name(h,module));return out;
-}
-static const u16 *control_summary(volatile u32 *h,u32 module) {
-    if(module==PLUGIN_GRAIN) return grain_summary(h);
-    if(module==PLUGIN_SPLIT_TONING) {
-        u32 preset=split_preset(h[GRKIT_HOST_SPLIT_TONE/4]);u16 *out=menu_buffer(h,1);
-        u32 at=append_text(out,0,text(h,TEXT_SPLIT_PRESET+split_menu_row(h)));
-        if(preset) {at=path_separator(out,at);append_text(out,at,text(h,split_percent(h) ? TEXT_STRENGTH_LEVEL+split_percent(h)/5-1 : TEXT_OFF));}
-        return out;
-    }
-    if(module==PLUGIN_DATE_STAMP) {
-        u16 *out=menu_buffer(h,1);u32 at=append_text(out,0,text(h,TEXT_STAMP_FORMAT+stamp_format(h)));
-        if(stamp_format(h)) {at=path_separator(out,at);append_text(out,at,text(h,TEXT_STAMP_LOOK+stamp_look(h)));}
-        return out;
-    }
-    static const u16 colon[]={':',' ',0};
-    u16 *out=menu_buffer(h,1);u32 at;
-    at=append_text(out,0,control_name(h,module));at=append_text(out,at,colon);
-    append_text(out,at,modules[module].label(h,modules[module].committed(h)));return out;
-}
-static const u16 *menu_detail(volatile u32 *h) {
-    u32 module=current_index(h),cursor=h[GRKIT_HOST_MENU_CURSOR/4];
-    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) return module<PLUGIN_COUNT ? control_summary(h,module) : modules[module].summary(h);
-    if(module==PLUGIN_GRAIN && !grain_stage(h) && cursor<grain_options()) {
-        static const u16 colon[]={':',' ',0};u16 *out=menu_buffer(h,1);
-        u32 at=append_text(out,0,text(h,TEXT_GRAIN_MENU+cursor));at=append_text(out,at,colon);
-        u32 level=grain_level(h);
-        const u16 *value=cursor==0 ? text(h,level ? GRAIN_LABEL_TEXT+level-1 : TEXT_OFF) : text(h,cursor==1 ? TEXT_GRAIN_BOOST+grain_boost(h) : TEXT_GRAIN_PATTERN+grain_pattern(h));
-        append_text(out,at,value);return out;
-    }
-    if(module==PLUGIN_COLOUR_RANGE && h[GRKIT_HOST_COLOUR_MENU/4] ) return control_summary(h,colour_child(h,cursor));
-    return modules[module].label(h,cursor);
-}
-static u32 menu_row_icon(volatile u32 *h,u32 row) {
-    u32 owner=h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? root_module(h,row) : h[GRKIT_HOST_MODULE/4];
-    if(owner==ABOUT_MODULE) return GRKIT_ICON_GRKIT;
-    if(owner==PLUGIN_GRAIN && h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && (grain_stage(h)==7 || (!grain_stage(h) && row==2))) return module_icon(PLUGIN_IMAGE_CONTROL,GRKIT_ICON_TILE(3));
-    if(owner==PLUGIN_GRAIN && h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && ((!grain_stage(h) && row==0) || (grain_stage(h)==5 && row))) return GRKIT_ICON_GRKIT;
-    if(owner==PLUGIN_SOFT_SHORTCUT) return FN_GUIDE_ICON;
-    if(owner==PLUGIN_SPLIT_TONING && h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && (split_stage(h)==4 || (!split_stage(h) && row==1))) return GRKIT_ICON_GRKIT;
-    /* Category symbols are separate from every child control. */
-    if(owner>=GROUP_FRAME && owner<=GROUP_TEXTURE) return module_icon(PLUGIN_IMAGE_CONTROL,GRKIT_ICON_TILE(owner==GROUP_FRAME ? 1 : owner==GROUP_TONE ? 2 : 3));
-    if(owner==PLUGIN_COLOUR_RANGE && h[GRKIT_HOST_COLOUR_MENU/4]) owner=colour_child(h,row);
-    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT || (h[GRKIT_HOST_MODULE/4]==PLUGIN_COLOUR_RANGE && h[GRKIT_HOST_COLOUR_MENU/4])) return module_icon(owner,GRKIT_ICON_TILE(0));
-    return module_icon(owner,modules[owner].icon(h,row));
+    /* Leaving a level without OK restores the committed effect in the live view. */
+    h[GRKIT_HOST_PREVIEW/4]=0;
+    menu_normalize(h);
+    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT) return 0;
+    if(current_module(h)==&soft_settings_module && soft_stage(h)){u32 stage=soft_stage(h);h[GRKIT_HOST_SOFT_STAGE/4]=0;h[GRKIT_HOST_MENU_CURSOR/4]=stage-1;return 1;}
+    h[GRKIT_HOST_MENU_LEVEL/4]=MENU_ROOT;
+    h[GRKIT_HOST_MENU_CURSOR/4]=root_row(h,h[GRKIT_HOST_MODULE/4]);
+    return 1;
 }
 #endif

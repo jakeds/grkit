@@ -46,10 +46,69 @@ static unsigned flushes, native_aspect;
 static uint32_t ifd_entry, ifd_writes, ifd_values[32];
 #define PICTURE_IFD_SET_SHORT(entry,index,value) do { assert((index) < 32 && !((value) >> 16)); \
     ifd_entry = (entry); ifd_values[(index)] = (value); ++ifd_writes; } while (0)
+/* The module settings: those of Date Imprint, STYLE (handle 0, 6 values) and
+   LOOK (handle 1, 3 values). */
+#define TEST_SETTINGS 0x5f000000U
+static uint32_t settings_memory[2 + 3 * 3];
+static volatile uint32_t *mapped_settings(uint32_t address)
+{
+    assert(address == TEST_SETTINGS);
+    return settings_memory;
+}
+#define MODULE_SETTINGS_MAP(address) mapped_settings(address)
+#define STAMP_STYLE settings_memory[3]
+#define STAMP_LOOK settings_memory[6]
+#define STAMP_POSITION settings_memory[9]
+#define DATE_STAMP_STYLE_MAX 5U
+/* The plane filter of Date Imprint (modules/date): the harness maps its
+   apply address to the module function. */
+#define TEST_DATE_APPLY 0x5e000031U
+static void test_apply(uint32_t address, void *set, uint32_t value);
+#define MODULE_APPLY(address,set,value) test_apply(address,set,value)
+/* The GR III noise fill: the native fill writes 0x77, the allocator hands out
+   one block of the arena, and the timer count is a test value. */
+#define GRAIN_PLANE (ARENA + 0x400000)
+#define GRAIN_BLOCK (ARENA + 0x480000)
+static unsigned grain_native_fills, grain_allocations, grain_releases, grain_no_memory;
+static uint32_t grain_counter_value, grain_counter_step;
+#define GRAIN_NATIVE_FILL(buffer,size) (++grain_native_fills, memset(region((buffer), (size)), 0x77, (size)))
+#define GRAIN_ALLOCATE(size) (++grain_allocations, (void)region(GRAIN_BLOCK, (size)), grain_no_memory ? 0U : GRAIN_BLOCK)
+#define GRAIN_RELEASE(block) (assert((block) == GRAIN_BLOCK), ++grain_releases)
+#define GRAIN_MAP(address) ((u8 *)region((address), 1))
+/* Each read of the timer advances it by grain_counter_step. */
+#define GRAIN_COUNTER(high) (*(high) = 0, (grain_counter_value += grain_counter_step) - grain_counter_step)
+#define GRAIN_COUNTER_MHZ 24U
+#define TEST_PROFILE (ARENA + 0x4f0000)
+#define PROFILE_MAP(address) ((volatile u32 *)region((address), 4))
 #include "picture.c"
 
-static volatile u32 header[GRKIT_HOST_HEADER_SIZE/4];
+static volatile u32 header[GRKIT_HOST_HEADER_SIZE / 4];
 volatile u32 *framing_header(void) { return header; }
+/* The services of the core that the module calls (runtime/sdk/grkit.h). */
+#define GRKIT_BYTES(address) ((volatile u8 *)mapped((address), 1))
+#include "../../modules/date/stamp.c"
+const GrkitContext grkit_self = {0, 2, 0};
+u32 setting_get(u32 handle) { return setting_value(header, handle); }
+void local_time(GrkitDateTime *out) { PICTURE_DATE(out); }
+/* The live-view sign of the module (date_badge). This test checks pictures,
+   so the label draws nothing. */
+static void overlay_label(const Surface *s,u32 label,u32 left,u32 top) { (void)s; (void)label; (void)left; (void)top; }
+u32 divide(u32 n, u32 d) { return core_divide(n, d); }
+/* The turns of the last plane set that the date filter got. */
+static uint32_t applied_turns = 0xffffffffU;
+static void test_apply(uint32_t address, void *set, uint32_t value)
+{
+    assert(address == TEST_DATE_APPLY);
+    applied_turns = ((PictureSet *)set)->turns;
+    date_apply(set, value);
+}
+/* Register the plane filter of Date Imprint, as INSTALL does, or none. */
+static void date_module(int loaded)
+{
+    header[GRKIT_HOST_MODULE_FILTER_COUNT / 4] = loaded ? 1 : 0;
+    header[GRKIT_HOST_MODULE_FILTERS / 4] = TEST_DATE_APPLY;
+    header[GRKIT_HOST_MODULE_FILTERS / 4 + 1] = GRKIT_STAGE_MARK << 16 | 0;
+}
 
 #define RECORDS (ARENA + 0x100)
 #define OBJECT (ARENA + 0x8000)
@@ -64,8 +123,13 @@ static void reset(void)
     memset((void *)header, 0, sizeof(header));
     header[GRKIT_HOST_COUNT / 4] = 3;
     header[GRKIT_HOST_RECORDS / 4] = RECORDS;
-    /* Every plugin is installed. */
-    header[GRKIT_HOST_PLUGINS / 4] = (1U << PLUGIN_COUNT) - 1;
+    /* Date Imprint is loaded, and its settings are 0. */
+    memset(settings_memory, 0, sizeof(settings_memory));
+    settings_memory[0] = 3; settings_memory[4] = 6; settings_memory[7] = 3; settings_memory[10] = 2;
+    header[GRKIT_HOST_MODULE_SETTINGS / 4] = TEST_SETTINGS;
+    date_module(1);
+    /* The Framing module uses CORE.ASPECT, so a stored crop applies. */
+    header[GRKIT_HOST_CAPABILITIES / 4] = 1U << (GRKIT_CORE_ASPECT - GRKIT_CORE_SETTING_BASE);
 }
 static uint32_t record(uint32_t index) { return RECORDS + index * GRKIT_RECORD_SIZE; }
 static void post(uint32_t r, const short *matrix)
@@ -110,15 +174,18 @@ static void picture(uint32_t index, uint32_t width, uint32_t height, uint32_t pi
 }
 /* The shot settings pointer of the encoded pictures. */
 #define SHOT (ARENA + 0x9000)
-/* Record r for a shot in the shot ring, as the still build stores it. */
-static void store_shot(uint32_t shot, uint32_t r)
+/* Record r and the posture of the electronic level for a shot in the shot
+   ring, as the still build stores them. */
+static void store_posed(uint32_t shot, uint32_t r, uint32_t posture)
 {
     uint32_t ring = SCRATCH + GRKIT_SHOT_RING, n = WORD(ring, 0);
-    uint32_t entry = ring + 8 + (n & (GRKIT_SHOT_ENTRIES - 1)) * 8;
-    WORD(entry, 0) = shot;
-    WORD(entry, 4) = r;
+    uint32_t entry = ring + GRKIT_SHOT_ENTRY + (n & (GRKIT_SHOT_ENTRIES - 1)) * GRKIT_SHOT_STRIDE;
+    WORD(entry, GRKIT_SHOT_KEY) = shot;
+    WORD(entry, GRKIT_SHOT_RECORD) = r;
+    WORD(entry, GRKIT_SHOT_POSTURE) = posture;
     WORD(ring, 0) = n + 1;
 }
+static void store_shot(uint32_t shot, uint32_t r) { store_posed(shot, r, 1); }
 static void still(uint32_t r) { store_shot(SHOT, r); }
 static void encode_setup(void)
 {
@@ -146,7 +213,7 @@ static void fill_planes(uint8_t luma, uint8_t cb, uint8_t cr)
 /* Changed pixels: their bounding box, whether all are lighter (and keep their
    chroma for a monochrome effect), whether a lit pair is orange, and the
    largest luma change. */
-struct box { uint32_t left, top, right, bottom, lit; int lighter, orange; uint32_t lift; };
+struct box { uint32_t left, top, right, bottom, lit; int lighter, orange; uint32_t lift; int yellow; };
 static struct box changes(uint32_t index, int mono)
 {
     const struct test_plane *p = &planes[index];
@@ -159,6 +226,8 @@ static struct box changes(uint32_t index, int mono)
         if (mono && chroma != stock) b.lighter = 0;
         if (luma - base_y > (int)b.lift) b.lift = luma - base_y;
         if (!(x & 1) && luma >= 110 && chroma <= 105 && BYTE(p->c, y * p->pitch + x + 1) >= 165) b.orange = 1;
+        /* GR1s yellow: bright, low Cb, Cr a little above neutral. */
+        if (!(x & 1) && luma >= 150 && chroma <= 90 && BYTE(p->c, y * p->pitch + x + 1) >= 130 && BYTE(p->c, y * p->pitch + x + 1) < 165) b.yellow = 1;
         if (x < b.left) b.left = x;
         if (y < b.top) b.top = y;
         if (x + 1 > b.right) b.right = x + 1;
@@ -168,217 +237,219 @@ static struct box changes(uint32_t index, int mono)
     return b;
 }
 
-/* Impulse highlights exercise the diffusion kernel, tint, disabled path,
-   odd dimensions, padded rows and both chroma layouts. */
-static void test_diffusion(void) {
-    for(u32 half=0;half<2;++half) for(u32 warm=0;warm<2;++warm) {
-        reset();
-        PictureSet set={0};
-        Plane p={PLANES,PLANES+80*64,64,64,80,half,0,0,64,64};
-        set.scratch=PICTURE_MAP(SCRATCH); set.count=1; set.planes[0]=p;
-        memset(PICTURE_MAP(p.y),40,80*64);
-        memset(PICTURE_MAP(p.c),128,80*64);
-        for(u32 y=24;y<40;++y) for(u32 x=24;x<40;++x) BYTE(p.y,y*80+x)=250;
-        u32 previous=40;
-        for(u32 row=0;row<21;++row) {
-            memset(PICTURE_MAP(p.y),40,80*64);memset(PICTURE_MAP(p.c),128,80*64);
-            for(u32 yy=24;yy<40;++yy) for(u32 xx=24;xx<40;++xx) BYTE(p.y,yy*80+xx)=250;
-            diffusion_apply(&set,strength_code(row),warm);
-            u32 sample=BYTE(p.y,32*80+23);assert(sample>=previous);previous=sample;
-        }
-        memset(PICTURE_MAP(p.y),40,80*64);memset(PICTURE_MAP(p.c),128,80*64);
-        for(u32 yy=24;yy<40;++yy) for(u32 xx=24;xx<40;++xx) BYTE(p.y,yy*80+xx)=250;
-        diffusion_apply(&set,0,warm);
-        assert(BYTE(p.y,32*80+23)==40);
-        diffusion_apply(&set,3,warm);
-        assert(BYTE(p.y,32*80+23)>40);
-        assert(BYTE(p.y,4*80+4)==40);
-        for(u32 y=0;y<64;++y) for(u32 x=64;x<80;++x) assert(BYTE(p.y,y*80+x)==40);
-        u32 cr=BYTE(p.c,(half ? 16U : 32U)*80+23);
-        assert(warm ? cr>128 : cr==128);
-        /* Monochrome records retain neutral chroma. */
-        set.mono=1;
-        memset(PICTURE_MAP(p.c),128,80*64);
-        diffusion_apply(&set,3,warm);
-        for(u32 y=0;y<(half ? 32U : 64U);++y)
-            for(u32 x=0;x<64;++x) assert(BYTE(p.c,y*80+x)==128);
-        /* Partial grid cells, insets and dark pictures change no pixels. */
-        p.left=2; p.top=2; p.right=62; p.bottom=61; set.planes[0]=p;
-        memset(PICTURE_MAP(p.y),40,80*64);
-        diffusion_apply(&set,3,warm);
-        for(u32 y=0;y<64;++y) for(u32 x=0;x<80;++x) assert(BYTE(p.y,y*80+x)==40);
-    }
-    /* Half-resolution uniform maps stay uniform even at large coordinates. */
-    u8 map[16]; memset(map,173,sizeof(map));
-    for(u32 x=0;x<32;++x) assert(diffusion_sample(map,4,4,x,x,3)==173);
+#ifdef GRAIN_FILL_PITCH
+/* An independent model of the fill: four xorshift128 generators seeded with
+   splitmix32, then a 2D binomial filter with the edge samples repeated. */
+static uint32_t ref_mix(uint32_t *x)
+{
+    uint32_t z = (*x += 0x9e3779b9U);
+    z = (z ^ (z >> 16)) * 0x85ebca6bU;
+    z = (z ^ (z >> 13)) * 0xc2b2ae35U;
+    return z ^ (z >> 16);
 }
-
-static void test_colour_controls(void) {
-    u8 *table=PICTURE_MAP(SCRATCH);
-    /* Shadow lift is monotonic, reaches the promised floor, and leaves all
-       values from 96 upwards untouched. Off is bit-exact. */
-    for(u32 level=0;level<4;++level) {
-        assert(black_floor_value(0,level)==4*level);
-        for(u32 y=1;y<256;++y) {
-            assert(black_floor_value(y,level)>=black_floor_value(y-1,level));
-            assert(black_floor_value(y,level)>=y);
-            if(y>=96 || !level) assert(black_floor_value(y,level)==y);
+/* The four xorshift128 generators of the fill. */
+struct ref_state { uint32_t a[4], b[4], c[4], d[4]; };
+static void ref_seed(struct ref_state *s, uint32_t seed)
+{
+    for (int i = 0; i < 4; ++i) { s->a[i] = ref_mix(&seed); s->b[i] = ref_mix(&seed); s->c[i] = ref_mix(&seed); s->d[i] = ref_mix(&seed) | 1U; }
+}
+static void ref_fill(struct ref_state *s, uint8_t *plane, uint32_t pitch, uint32_t height)
+{
+    for (uint32_t y = 0; y < height; ++y)
+        for (uint32_t x = 0; x < pitch; x += 16)
+            for (int i = 0; i < 4; ++i) {
+                uint32_t t = s->a[i] ^ (s->a[i] << 11);
+                s->a[i] = s->b[i]; s->b[i] = s->c[i]; s->c[i] = s->d[i];
+                s->d[i] = s->d[i] ^ (s->d[i] >> 19) ^ t ^ (t >> 8);
+                memcpy(plane + y * pitch + x + 4 * i, &s->d[i], 4);
+            }
+}
+static void ref_random(uint8_t *plane, uint32_t pitch, uint32_t height, uint32_t seed)
+{
+    struct ref_state s;
+    ref_seed(&s, seed);
+    ref_fill(&s, plane, pitch, height);
+}
+/* The blur of an n x n tile with its edges wrapped, at half the deviation. */
+static void ref_tile(const uint8_t *in, uint8_t *out, int n, uint32_t taps)
+{
+    static const int k3[3] = {1, 2, 1}, k5[5] = {1, 4, 6, 4, 1};
+    const int *k = taps == 3 ? k3 : k5, half = (int)taps / 2, mean = 128 * (taps == 3 ? 16 : 256);
+    const int gain = taps == 3 ? 5461 : 468;
+    for (int y = 0; y < n; ++y)
+        for (int x = 0; x < n; ++x) {
+            int sum = 0;
+            for (int j = -half; j <= half; ++j)
+                for (int i = -half; i <= half; ++i)
+                    sum += k[j + half] * k[i + half] * in[((y + j + n) % n) * n + (x + i + n) % n];
+            int v = 128 + ((2 * (sum - mean) * gain + 65536) >> 17);
+            out[y * n + x] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
         }
-    }
-    /* The shoulder is monotonic, identity below 176, and bounded at white. */
-    for(u32 level=0;level<4;++level) {
-        assert(highlight_rolloff_sample(255,level)==255-8*level);
-        for(u32 y=1;y<256;++y) {
-            assert(highlight_rolloff_sample(y,level)>=highlight_rolloff_sample(y-1,level));
-            assert(highlight_rolloff_sample(y,level)<=y);
-            if(y<=176 || !level) assert(highlight_rolloff_sample(y,level)==y);
-        }
-    }
-    /* Fine steps reach a visible 48/255 floor, taper to neutral at 128,
-       and preserve monotonic tone order at every strength. */
-    for(u32 row=0;row<21;++row) {
-        u32 code=strength_code(row);
-        assert(black_floor_value(0,code)==(48*row+10)/20);
-        assert(highlight_rolloff_sample(255,code)==255-(24*row+10)/20);
-        for(u32 y=1;y<256;++y) {
-            assert(black_floor_value(y,code)>=black_floor_value(y-1,code));
-            assert(highlight_rolloff_sample(y,code)>=highlight_rolloff_sample(y-1,code));
-            if(y>=128 || !row) assert(black_floor_value(y,code)==y);
-            if(row) {
-                assert(black_floor_value(y,code)>=black_floor_value(y,strength_code(row-1)));
-                assert(highlight_rolloff_sample(y,code)<=highlight_rolloff_sample(y,strength_code(row-1)));
+}
+/* Each row, then each column, of a tile moved to the mean 128: the mean of
+   its deviations, rounded half away from zero, comes off each sample, which
+   stays in 0..255. */
+static void ref_center(uint8_t *tile, int n)
+{
+    for (int pass = 0; pass < 2; ++pass)
+        for (int a = 0; a < n; ++a) {
+            int s = 0;
+            for (int b = 0; b < n; ++b) s += tile[pass ? b * n + a : a * n + b] - 128;
+            int d = s < 0 ? -((-s + n / 2) / n) : (s + n / 2) / n;
+            for (int b = 0; b < n; ++b) {
+                uint8_t *v = &tile[pass ? b * n + a : a * n + b];
+                int w = *v - d;
+                *v = (uint8_t)(w < 0 ? 0 : w > 255 ? 255 : w);
             }
         }
-    }
-    /* The new warm families shift both endpoints warmer, preserve middle
-       neutrals, and respond to the full 5% strength range. */
-    for(u32 preset=13;preset<=16;++preset) for(u32 step=1;step<=20;++step) {
-        reset();PictureSet set={0};Plane p={PLANES,PLANES+80*64,64,64,80,0,0,0,64,64};
-        set.scratch=PICTURE_MAP(SCRATCH);set.count=1;set.planes[0]=p;
-        header[GRKIT_HOST_SPLIT_TONE/4]=preset;header[GRKIT_HOST_SPLIT_STRENGTH/4]=step+1;
-        memset(PICTURE_MAP(p.y),0,80*64);memset(PICTURE_MAP(p.c),128,80*64);
-        split_toning_apply_picture(header,&set);
-        assert(BYTE(p.c,0)<128 && BYTE(p.c,1)>128);
-        if(preset==13 && step==20) assert(BYTE(p.c,0)==112 && BYTE(p.c,1)==144);
-        memset(PICTURE_MAP(p.y),128,80*64);memset(PICTURE_MAP(p.c),128,80*64);
-        split_toning_apply_picture(header,&set);assert(BYTE(p.c,0)==128 && BYTE(p.c,1)==128);
-    }
-    /* No colour adjustment is exactly identity, including all extreme codes. */
-    colour_table(table,0,0);
-    for(u32 cb=0;cb<256;++cb) for(u32 cr=0;cr<256;++cr) {
-        u32 at=(cb*256+cr)*2;
-        assert(table[at]==cb && table[at+1]==cr);
-    }
-    colour_table(table,2,0); /* Reds at -50%. */
-    assert(table[(85*256+255)*2]>85 && table[(85*256+255)*2+1]<255);
-    assert(table[(43*256+21)*2]==43 && table[(43*256+21)*2+1]==21); /* Green stays green. */
-    assert(table[(128*256+128)*2]==128 && table[(128*256+128)*2+1]==128);
-    colour_table(table,2|(2U<<9),0); /* Red AND green settings remain active. */
-    assert(table[(85*256+255)*2]>85 && table[(43*256+21)*2]>43);
-    colour_table(table,0,3); /* A positive red hue shift changes direction. */
-    assert(table[(85*256+255)*2]!=85 || table[(85*256+255)*2+1]!=255);
-    for(u32 half=0;half<2;++half) {
-        reset();
-        PictureSet set={0};
-        Plane p={PLANES,PLANES+80*64,64,64,80,half,2,3,62,61};
-        set.count=1;set.planes[0]=p;set.scratch=PICTURE_MAP(SCRATCH);
-        memset(PICTURE_MAP(p.y),0,80*64);memset(PICTURE_MAP(p.c),128,80*64);
-        header[GRKIT_HOST_BLACK_FLOOR/4]=2;
-        black_floor_apply_picture(header,&set);
-        assert(BYTE(p.y,10*80+10)==8 && BYTE(p.y,2*80+10)==0 && BYTE(p.y,10*80+63)==0);
-        /* Split tone moves shadow and highlight chroma in opposite directions;
-           luma, neutral midtones, padding and partial chroma boundary rows stay intact. */
-        header[GRKIT_HOST_SPLIT_TONE/4]=1;
-        split_toning_apply_picture(header,&set);
-        assert(BYTE(p.c,(half ? 5U : 10U)*80+10)>128);
-        assert(BYTE(p.c,(half ? 5U : 10U)*80+11)<128);
-        assert(BYTE(p.y,10*80+10)==8);
-        assert(BYTE(p.c,80+10)==128 && BYTE(p.c,10*80+63)==128);
-        memset(PICTURE_MAP(p.y),255,80*64);memset(PICTURE_MAP(p.c),128,80*64);
-        split_toning_apply_picture(header,&set);
-        assert(BYTE(p.c,(half ? 5U : 10U)*80+10)<128);
-        assert(BYTE(p.c,(half ? 5U : 10U)*80+11)>128);
-        memset(PICTURE_MAP(p.y),128,80*64);memset(PICTURE_MAP(p.c),128,80*64);
-        split_toning_apply_picture(header,&set);
-        for(u32 i=0;i<80*64;++i) assert(BYTE(p.c,i)==128 && BYTE(p.y,i)==128);
-        /* Brightness uses original chroma, preserves padding, and bypasses
-           mono and Off. Red gains luma; neutral grey stays unchanged. */
-        memset(PICTURE_MAP(p.y),100,80*64);
-        memset(PICTURE_MAP(p.c),128,80*64);
-        for(u32 yy=0;yy<64;++yy) for(u32 xx=0;xx<64;xx+=2) {
-            BYTE(p.c,yy*80+xx)=85; BYTE(p.c,yy*80+xx+1)=255;
-        }
-        header[GRKIT_HOST_COLOUR_RANGE/4]=1;
-        header[GRKIT_HOST_COLOUR_BRIGHTNESS/4]=4;
-        colour_range_apply_picture(header,&set);
-        assert(BYTE(p.y,10*80+10)>=118 && BYTE(p.y,2*80+10)==100 && BYTE(p.y,10*80+63)==100);
-        assert(BYTE(p.c,10*80+10)==85 && BYTE(p.c,10*80+11)==255);
-        memset(PICTURE_MAP(p.y),100,80*64); set.mono=1;
-        colour_range_apply_picture(header,&set); assert(BYTE(p.y,10*80+10)==100); set.mono=0;
-        memset(PICTURE_MAP(p.c),128,80*64);
-        colour_range_apply_picture(header,&set); assert(BYTE(p.y,10*80+10)==100);
-        header[GRKIT_HOST_COLOUR_BRIGHTNESS/4]=0;
-        memset(PICTURE_MAP(p.y),255,80*64); header[GRKIT_HOST_HIGHLIGHT_ROLLOFF/4]=3;
-        highlight_rolloff_apply_picture(header,&set);
-        assert(BYTE(p.y,10*80+10)==231 && BYTE(p.y,2*80+10)==255 && BYTE(p.y,10*80+63)==255);
-        header[GRKIT_HOST_HIGHLIGHT_ROLLOFF/4]=0;
-        /* Remembered per-range settings do not overwrite each other. */
-        header[GRKIT_HOST_COLOUR_RANGE/4]=1;colour_write(header,GRKIT_HOST_COLOUR_SATURATION,2,5);
-        header[GRKIT_HOST_COLOUR_RANGE/4]=4;colour_write(header,GRKIT_HOST_COLOUR_SATURATION,3,5);
-        assert(colour_read(header,GRKIT_HOST_COLOUR_SATURATION,5)==3);
-        header[GRKIT_HOST_COLOUR_RANGE/4]=1;assert(colour_read(header,GRKIT_HOST_COLOUR_SATURATION,5)==2);
-        header[GRKIT_HOST_COLOUR_RANGE/4]=0;
-        colour_range_apply_picture(header,&set); /* Off bypasses all remembered edits. */
-        for(u32 i=0;i<80*64;++i) assert(BYTE(p.c,i)==128);
-    }
 }
+/* Medium and large grain: tiles 256 and 240 wide from the random bytes in
+   that order, then the plane of their sum, each tile from a place that one
+   splitmix32 value of the last state word of generator 0 gives: the start
+   row from bits 8 and up, the start column in 16-sample blocks from bits 0
+   to 7. */
+enum { REF_A = 256, REF_B = 240 };
+static void ref_grain(uint8_t *plane, uint32_t pitch, uint32_t height, uint32_t taps, uint32_t seed)
+{
+    static uint8_t ra[REF_A * REF_A], rb[REF_B * REF_B], ta[REF_A * REF_A], tb[REF_B * REF_B];
+    struct ref_state s;
+    ref_seed(&s, seed);
+    ref_fill(&s, ra, REF_A, REF_A);
+    ref_fill(&s, rb, REF_B, REF_B);
+    ref_tile(ra, ta, REF_A, taps);
+    ref_tile(rb, tb, REF_B, taps);
+    ref_center(ta, REF_A);
+    ref_center(tb, REF_B);
+    uint32_t place = s.d[0], pa = ref_mix(&place), pb = ref_mix(&place);
+    uint32_t ya = (pa >> 8) % REF_A, xa = (pa & 255) % (REF_A / 16) * 16;
+    uint32_t yb = (pb >> 8) % REF_B, xb = (pb & 255) % (REF_B / 16) * 16;
+    for (uint32_t y = 0; y < height; ++y)
+        for (uint32_t x = 0; x < pitch; ++x) {
+            int a = ta[(ya + y) % REF_A * REF_A + (xa + x) % REF_A];
+            int b = tb[(yb + y) % REF_B * REF_B + (xb + x) % REF_B];
+            int s = a + b - 256, v = 128 + s + ((2 * s * 13573 + 32768) >> 16);
+            plane[y * pitch + x] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+        }
+}
+/* Mean, standard deviation, and the correlation of horizontal neighbours. */
+static void grain_stats(const uint8_t *p, uint32_t n, double *mean, double *std, double *corr)
+{
+    double s = 0, ss = 0, c = 0;
+    for (uint32_t i = 0; i < n; ++i) { s += p[i]; ss += (double)p[i] * p[i]; }
+    *mean = s / n;
+    *std = ss / n - *mean * *mean;
+    for (uint32_t i = 0; i + 1 < n; ++i) c += (p[i] - *mean) * (p[i + 1] - *mean);
+    *corr = c / (n - 1) / *std;
+    *std = __builtin_sqrt(*std);
+}
+static void grain_contract(void)
+{
+    enum { PITCH = 1024, HEIGHT = 64, SIZE = PITCH * HEIGHT };
+    static uint8_t want[SIZE], noise[SIZE];
+    uint8_t *plane = region(GRAIN_PLANE, SIZE);
+    double mean, std, corr;
+    grain_counter_value = 0x12345678U;
+    /* The native noise for a shot without GRKit grain, and for a plane that
+       the fill cannot take. */
+    for (int c = 0; c < 4; ++c) {
+        static const uint32_t shot[4] = {0, 4, 2, 2}, pitch[4] = {PITCH, PITCH, 1000, PITCH}, size[4] = {SIZE, SIZE, 1000 * HEIGHT, SIZE - 1};
+        header[GRKIT_HOST_GRAIN_SHOT / 4] = shot[c];
+        grain_native_fills = 0;
+        grain_noise(GRAIN_PLANE, size[c], pitch[c], HEIGHT);
+        assert(grain_native_fills == 1 && plane[0] == 0x77);
+    }
+    /* Small: one random byte each, the same bytes as the model, which are
+       uniform and unrelated to their neighbours. */
+    header[GRKIT_HOST_GRAIN_SHOT / 4] = 1;
+    grain_native_fills = grain_allocations = 0;
+    grain_noise(GRAIN_PLANE, SIZE, PITCH, HEIGHT);
+    ref_random(noise, PITCH, HEIGHT, 0x12345678U);
+    assert(!grain_native_fills && !grain_allocations && !memcmp(plane, noise, SIZE));
+    grain_stats(plane, SIZE, &mean, &std, &corr);
+    assert(mean > 126 && mean < 129 && std > 72 && std < 76 && corr > -0.02 && corr < 0.02);
+    /* Another timer count gives another pattern. */
+    grain_counter_value = 0x12345679U;
+    grain_noise(GRAIN_PLANE, SIZE, PITCH, HEIGHT);
+    assert(memcmp(plane, noise, SIZE));
+    /* Medium and large: the sum of two wrapped tiles of the model's filter.
+       The noise has about the standard deviation of one random byte, wider
+       grain, and no seam: neighbours across a 128-sample line correlate as
+       the others do. */
+    for (uint32_t shot = 2; shot <= 3; ++shot) {
+        uint32_t taps = shot == 2 ? 3 : 5;
+        header[GRKIT_HOST_GRAIN_SHOT / 4] = shot;
+        grain_allocations = grain_releases = 0;
+        grain_noise(GRAIN_PLANE, SIZE, PITCH, HEIGHT);
+        assert(grain_allocations == 1 && grain_releases == 1);
+        ref_grain(want, PITCH, HEIGHT, taps, 0x12345679U);
+        assert(!memcmp(plane, want, SIZE));
+        grain_stats(plane, SIZE, &mean, &std, &corr);
+        /* Each tile row and column has the mean 128, so the plane does too,
+           and no row repeats a mean along its length as a line. Rows of
+           tiles without that keep a mean with an RMS of 7 to 8 here; the
+           rest comes from the part of the last 240-sample repeat. */
+        assert(mean > 127 && mean < 129 && std > 66 && std < 76);
+        double rows = 0;
+        for (uint32_t y = 0; y < HEIGHT; ++y) {
+            double row = 0;
+            for (uint32_t x = 0; x < PITCH; ++x) row += plane[y * PITCH + x];
+            row = row / PITCH - mean;
+            rows += row * row;
+        }
+        assert(__builtin_sqrt(rows / HEIGHT) < 2);
+        assert(taps == 3 ? corr > 0.6 && corr < 0.72 : corr > 0.74 && corr < 0.84);
+        double seam = 0, other = 0;
+        for (uint32_t y = 0; y < HEIGHT; ++y)
+            for (uint32_t x = 0; x + 1 < PITCH; ++x) {
+                double d = ((double)plane[y * PITCH + x] - mean) * ((double)plane[y * PITCH + x + 1] - mean);
+                if (x % 128 == 127) seam += d; else other += d;
+            }
+        seam /= HEIGHT * (PITCH / 128); other /= HEIGHT * (PITCH - 1 - PITCH / 128);
+        assert(seam > other * 0.8 && seam < other * 1.2);
+    }
+    /* A pitch that is not a multiple of 64 or of a tile, and fewer rows
+       than taps: the last generator steps and the tile wrap. */
+    for (uint32_t shot = 1; shot <= 3; ++shot) {
+        static const uint32_t pitch = 48, rows[2] = {7, 2};
+        for (int h = 0; h < 2; ++h) {
+            uint32_t size = pitch * rows[h];
+            header[GRKIT_HOST_GRAIN_SHOT / 4] = shot;
+            grain_noise(GRAIN_PLANE, size, pitch, rows[h]);
+            if (shot == 1) ref_random(noise, pitch, rows[h], 0x12345679U);
+            else ref_grain(noise, pitch, rows[h], shot == 2 ? 3 : 5, 0x12345679U);
+            assert(!memcmp(plane, noise, size));
+        }
+    }
+    /* The profile counts the microseconds of the generic timer: two reads
+       24000 ticks apart at 24 MHz are 1000 us. Without the profile, nothing
+       is counted. */
+    memset(region(TEST_PROFILE, GRKIT_PROFILE_SIZE), 0, GRKIT_PROFILE_SIZE);
+    volatile u32 *slot = PROFILE_MAP(TEST_PROFILE + GRKIT_PROFILE_SLOTS + GRKIT_PROFILE_PICTURE_GRAIN * GRKIT_PROFILE_SLOT_SIZE);
+    header[GRKIT_HOST_GRAIN_SHOT / 4] = 3;
+    grain_counter_step = 24000;
+    grain_noise(GRAIN_PLANE, SIZE, PITCH, HEIGHT);
+    assert(slot[0] == 0);
+    header[GRKIT_HOST_PROFILE / 4] = TEST_PROFILE;
+    grain_noise(GRAIN_PLANE, SIZE, PITCH, HEIGHT);
+    assert(slot[0] == 1 && slot[1] == 1000 && slot[2] == 1000);
+    header[GRKIT_HOST_PROFILE / 4] = 0;
+    grain_counter_step = 0;
+    grain_counter_value = 0x12345679U;
+    /* Without memory for the row sums, a larger size gives small grain. */
+    grain_no_memory = 1;
+    grain_releases = 0;
+    grain_noise(GRAIN_PLANE, SIZE, PITCH, HEIGHT);
+    ref_random(noise, PITCH, HEIGHT, 0x12345679U);
+    assert(!grain_releases && !memcmp(plane, noise, SIZE));
+    grain_no_memory = 0;
+    header[GRKIT_HOST_GRAIN_SHOT / 4] = 0;
+}
+#endif
 
 int main(void)
 {
-    test_diffusion();
-    test_colour_controls();
-#ifdef GRKIT_TARGET_GR3_210
-    reset();
-    static const u32 amplitudes[]={0,64,128,256,26,51,77,102,154,179,205,230};
-    for(u32 code=1;code<12;++code) {
-        header[GRKIT_HOST_GRAIN/4]=code;
-        assert(grain_amplitude_value(1)==amplitudes[code]);
-    }
-    for(u32 row=1;row<=20;++row) {header[GRKIT_HOST_GRAIN/4]=strength_code(row);assert(grain_amplitude_value(1)==(row*256+10)/20);}
-    /* Default remains exact; opt-in gains are independent of Strength.
-       Corrupt/unknown settings safely fall back, and Off is never boosted. */
-    for(u32 row=1;row<=20;++row) {
-        u32 base=(row*256+10)/20;header[GRKIT_HOST_GRAIN/4]=strength_code(row);
-        for(u32 boost=0;boost<4;++boost) {
-            header[GRKIT_HOST_GRAIN_BOOST/4]=boost;
-            assert(grain_amplitude_value(1)==(boost==1 ? (base*3+1)/2 : boost==2 ? base*2 : base));
-        }
-    }
-    header[GRKIT_HOST_GRAIN_BOOST/4]=2;header[GRKIT_HOST_GRAIN/4]=0;
-    assert(grain_amplitude_value(1)==256 && grain_amplitude_value(2)==128);
-    header[GRKIT_HOST_GRAIN_BOOST/4]=0;
-    header[GRKIT_HOST_GRAIN/4]=0;
-    assert(grain_amplitude_value(1)==256 && grain_amplitude_value(2)==128 && grain_amplitude_value(3)==64);
-    header[GRKIT_HOST_GRAIN/4]=999;
-    assert(grain_amplitude_value(2)==128);
-    header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
-    u32 seed1=grain_seed_value(100,200), seed2=grain_seed_value(100,200);
-    assert(seed1!=seed2 && header[GRKIT_HOST_GRAIN_SEQUENCE/4]==2);
-    assert(header[GRKIT_HOST_GRAIN_SEED/4]==seed2);
-    header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
-    assert(grain_seed_value(100,200)==seed1);
-    header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
-    assert(grain_seed_value(101,200)!=seed1);
-    header[GRKIT_HOST_GRAIN_PATTERN/4]=1;
-    u32 seq=header[GRKIT_HOST_GRAIN_SEQUENCE/4];
-    assert(grain_seed_value(1,2)==0x534f4654U && grain_seed_value(500,600)==0x534f4654U);
-    assert(header[GRKIT_HOST_GRAIN_SEQUENCE/4]==seq);
-    /* Switching back to default recovers the original seed formula exactly. */
-    header[GRKIT_HOST_GRAIN_PATTERN/4]=0;header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
-    assert(grain_seed_value(100,200)==seed1);
-    header[GRKIT_HOST_GRAIN_PATTERN/4]=999;header[GRKIT_HOST_GRAIN_SEQUENCE/4]=0;
-    assert(grain_seed_value(100,200)==seed1);
-
+#ifdef GRAIN_FILL_PITCH
+    grain_contract();
 #endif
     static const short identity[9] = {8192, 0, 0, 0, 8192, 0, 0, 0, 8192};
     /* Native records and GRFX0001 records keep the native matrix bits. */
@@ -453,18 +524,26 @@ int main(void)
     for (int i = 0; i < 9; ++i) assert(coefficient(i) == bt601[i]);
     live(0);
 
-    /* Date text for each style: no leading zeros except the year and minutes. */
+    /* Date text for each style: no leading zeros except the year and minutes.
+       The GR1s look pads a one-digit month, day, or hour with a blank digit
+       cell ('_'), as its prints show. */
     {
-        static const char *const expected[] = {"'26 10 17", "'26 10 17  9:05", "10 17 '26", "17 10 '26"};
-        static const char *const early[] = {"'07 1 5", "'07 1 5  13:07", "1 5 '07", "5 1 '07"};
+        static const char *const expected[] = {"'26 10 17", "'26 10 17  9:05", "10 17 '26", "17 10 '26", "17 10 '26  9:05"};
+        static const char *const early[] = {"'07 1 5", "'07 1 5  13:07", "1 5 '07", "5 1 '07", "5 1 '07  13:07"};
+        static const char *const padded[] = {"'26 10 17", "'26 10 17  _9:05", "10 17 '26", "17 10 '26", "17 10 '26  _9:05"};
+        static const char *const early_padded[] = {"'07 _1 _5", "'07 _1 _5  13:07", "_1 _5 '07", "_5 _1 '07", "_5 _1 '07  13:07"};
         static const uint8_t date[6] = {2026 & 255, 2026 >> 8, 10, 17, 9, 5};
         static const uint8_t january[6] = {2007 & 255, 2007 >> 8, 1, 5, 13, 7};
         char text[20];
-        for (u32 style = 1; style <= 4; ++style) {
-            u32 n = date_text(text, date, style);
+        for (u32 style = 1; style <= DATE_STAMP_STYLE_MAX; ++style) {
+            u32 n = date_text(text, date, style, 0);
             assert(n == strlen(expected[style - 1]) && !memcmp(text, expected[style - 1], n));
-            n = date_text(text, january, style);
+            n = date_text(text, january, style, 0);
             assert(n == strlen(early[style - 1]) && !memcmp(text, early[style - 1], n));
+            n = date_text(text, date, style, 1);
+            assert(n == strlen(padded[style - 1]) && !memcmp(text, padded[style - 1], n));
+            n = date_text(text, january, style, 1);
+            assert(n == strlen(early_padded[style - 1]) && !memcmp(text, early_padded[style - 1], n));
         }
     }
     /* Off touches nothing. */
@@ -472,48 +551,12 @@ int main(void)
     picture_encode(0, MESSAGE);
     assert(flushes == 0);
     for (u32 i = 0; i < 3; ++i) assert(changes(i, 0).lit == 0);
-    /* Small mono styles have a padded ISO-like date and neutral, non-glowing
-       strokes. Test both colours and preserve padded columns in each plane. */
-    for(u32 style=5;style<=6;++style) {
-        static const u8 dt[6]={2026&255,2026>>8,1,5,9,5};
-        char text[20]; u32 n=date_text(text,dt,style);
-        assert(n==10 && !memcmp(text,"2026.01.05",10));
-        encode_setup(); fill_planes(style==5 ? 40 : 220,128,128);
-        header[GRKIT_HOST_STAMP/4]=style;
-        picture_encode(0,MESSAGE);
-        assert(flushes==12);
-        for(u32 i=0;i<3;++i) {
-            struct box b=changes(i,0);
-            assert(b.lit && !b.orange);
-            assert(style==5 ? b.lighter : !b.lighter);
-            assert(b.left>planes[i].width/2 && b.top>planes[i].height/2);
-            assert(b.bottom-b.top<=planes[i].height/40+2);
-        }
-    }
-    assert(mono_dot(":",1,2,2) && mono_dot(":",1,2,5) && !mono_dot(":",1,2,3));
-    assert(mono_dot("'",1,2,0) && !mono_dot("'",1,2,3));
-    /* Every exposed format can use either mono appearance independently. */
-    for(u32 style=1;style<=8;++style) if(style!=5 && style!=6) for(u32 look=3;look<=4;++look) {
-        encode_setup();fill_planes(look==3 ? 40 : 220,128,128);
-        header[GRKIT_HOST_STAMP/4]=style;header[GRKIT_HOST_STAMP_LOOK/4]=look;
-        picture_encode(0,MESSAGE);
-        for(u32 i=0;i<3;++i) {
-            struct box b=changes(i,0);assert(b.lit && !b.orange);
-            assert(look==3 ? b.lighter : !b.lighter);
-        }
-    }
-    /* The padded format also paints its separators with every film renderer. */
-    for(u32 look=0;look<3;++look) {
-        encode_setup();fill_planes(40,128,128);
-        header[GRKIT_HOST_STAMP/4]=8;header[GRKIT_HOST_STAMP_LOOK/4]=look;
-        picture_encode(0,MESSAGE);assert(changes(0,0).lit);
-    }
     /* On a dark neutral picture the stamp lights an orange core at the bottom
        right of the visible area, once per plane set, and only lightens. */
-    for (u32 style = 1; style <= 4; ++style) {
+    for (u32 style = 1; style <= DATE_STAMP_STYLE_MAX; ++style) {
         encode_setup();
         fill_planes(40, 128, 128);
-        header[GRKIT_HOST_STAMP / 4] = style;
+        STAMP_STYLE = style;
         picture_encode(0, MESSAGE);
         assert(flushes == 12);
         for (u32 i = 0; i < 3; ++i) {
@@ -526,41 +569,116 @@ int main(void)
             assert(b.left > p->width / 3 && b.top > p->height / 2);
         }
     }
+    /* The turns of a shot follow the posture of the electronic level at its
+       still build: 1 landscape, 3 and 4 the vertical postures, 2 upside
+       down. With the lens up or down (5, 6), the last turns stay. */
+    {
+        static const u32 posture[7] = {3, 6, 2, 5, 4, 1, 6};
+        static const u32 turns[7] = {1, 1, 2, 2, 3, 0, 0};
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 1;
+        for (u32 k = 0; k < 7; ++k) {
+            store_posed(SHOT, 0, posture[k]);
+            picture_encode(0, MESSAGE);
+            assert(applied_turns == turns[k]);
+        }
+        /* The ring holds noise after power-on: without a known posture, a
+           shot gets no turns. */
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 1;
+        WORD(SCRATCH + GRKIT_SHOT_RING, GRKIT_SHOT_LAST_TURNS) = 0x77;
+        store_posed(SHOT, 0, 6);
+        picture_encode(0, MESSAGE);
+        assert(applied_turns == 0);
+    }
+    /* Upright position: on each plane the stamp goes to the bottom right of
+       the picture turned upright, which is the top right of the frame for
+       one quarter turn, and its text runs along the long side of its box.
+       The film position keeps it at the bottom right of the frame. */
+    for (u32 position = 0; position < 2; ++position)
+        for (u32 k = 0; k < 4; ++k) {
+            static const u32 posture_of[4] = {1, 3, 2, 4};
+            u32 corner = position ? k : 0;
+            encode_setup();
+            fill_planes(40, 128, 128);
+            STAMP_STYLE = 2;
+            STAMP_POSITION = position;
+            store_posed(SHOT, 0, posture_of[k]);
+            picture_encode(0, MESSAGE);
+            for (u32 i = 0; i < 3; ++i) {
+                const struct test_plane *p = &planes[i];
+                struct box b = changes(i, 0);
+                assert(b.lit && b.lighter);
+                assert((corner <= 1) == (b.left > p->width / 2));
+                assert((corner >= 1 && corner <= 2) == (b.bottom < p->height / 2));
+            }
+            {
+                struct box b = changes(0, 0);
+                assert((corner & 1) == (b.bottom - b.top > b.right - b.left));
+            }
+        }
     /* Longer styles reach further left. */
     encode_setup();
     fill_planes(40, 128, 128);
-    header[GRKIT_HOST_STAMP / 4] = 1;
+    STAMP_STYLE = 1;
     picture_encode(0, MESSAGE);
     u32 short_left = changes(0, 0).left;
     encode_setup();
     fill_planes(40, 128, 128);
-    header[GRKIT_HOST_STAMP / 4] = 2;
+    STAMP_STYLE = 2;
     picture_encode(0, MESSAGE);
-    assert(changes(0, 0).left < short_left);
+    struct box long_box = changes(0, 0);
+    assert(long_box.left < short_left);
+    /* Day first with time has the same characters as style 2, so its mask has
+       the same size and it fits wherever style 2 fits. Only the first glyph
+       differs: an apostrophe for style 2, a digit for style 5. */
+    encode_setup();
+    fill_planes(40, 128, 128);
+    STAMP_STYLE = 5;
+    picture_encode(0, MESSAGE);
+    {
+        struct box b = changes(0, 0);
+        assert(b.right == long_box.right && b.top == long_box.top && b.bottom == long_box.bottom);
+        assert(abs((int)b.left - (int)long_box.left) <= 8);
+    }
     /* A screen blend fades on bright areas, as an exposure on film does. */
     encode_setup();
     fill_planes(40, 128, 128);
-    header[GRKIT_HOST_STAMP / 4] = 1;
+    STAMP_STYLE = 1;
     picture_encode(0, MESSAGE);
     u32 dark_lift = changes(0, 0).lift;
     encode_setup();
     fill_planes(240, 128, 128);
-    header[GRKIT_HOST_STAMP / 4] = 1;
+    STAMP_STYLE = 1;
     picture_encode(0, MESSAGE);
     {
         struct box b = changes(0, 0);
         assert(b.lighter && b.lift <= 15 && dark_lift >= 100);
     }
-#ifndef FRAMING_XPAN_NATIVE
-    /* 16:9 Framing: the screennail stamp stays above the bottom bar. */
+    /* 16:9 Framing (a crop also where the camera has 16:9): the screennail
+       stamp stays above the bottom bar. */
     encode_setup();
     fill_planes(40, 128, 128);
-    header[GRKIT_HOST_STAMP / 4] = 3;
+    STAMP_STYLE = 3;
     header[GRKIT_HOST_FRAME_RATIO / 4] = 2;
     picture_encode(0, MESSAGE);
     {
         struct box b = changes(1, 0);
         assert(b.lit && b.bottom <= 480 - 38 && b.top > 240);
+    }
+#ifndef FRAMING_XPAN_NATIVE
+    /* 2.35:1 Framing: above its bar, which is lower than the XPan bar. */
+    encode_setup();
+    fill_planes(40, 128, 128);
+    STAMP_STYLE = 3;
+    header[GRKIT_HOST_FRAME_RATIO / 4] = 4;
+    picture_encode(0, MESSAGE);
+    {
+        struct box sn = changes(1, 0), th = changes(2, 0);
+        assert(sn.lit && sn.bottom <= 480 - 87 && sn.bottom > 480 - 107 && sn.top > 240);
+        assert(th.lit && th.bottom <= 120 - 26 && th.bottom > 120 - 30);
     }
 #else
     /* GR IV: XPan applies to native 3:2 and native 16:9 captures. The
@@ -571,7 +689,7 @@ int main(void)
             for (u32 ratio = 0; ratio <= 1; ++ratio) {
                 encode_setup();
                 fill_planes(40, 128, 128);
-                header[GRKIT_HOST_STAMP / 4] = 3;
+                STAMP_STYLE = 3;
                 header[GRKIT_HOST_FRAME_RATIO / 4] = ratio;
                 native_aspect = native;
                 picture_encode(0, MESSAGE);
@@ -586,29 +704,212 @@ int main(void)
         assert(th[2][0].bottom <= 120 - 16 && th[2][0].bottom > 120 - 30);
         assert(sn[2][1].bottom <= 480 - 107 && sn[2][1].top > 240);
         assert(th[2][1].bottom <= 120 - 30);
+        /* 2.35:1 also applies to native 3:2 and native 16:9, above its bar. */
+        for (u32 native = 0; native <= 2; native += 2) {
+            encode_setup();
+            fill_planes(40, 128, 128);
+            STAMP_STYLE = 3;
+            header[GRKIT_HOST_FRAME_RATIO / 4] = 4;
+            native_aspect = native;
+            picture_encode(0, MESSAGE);
+            struct box b = changes(1, 0), t = changes(2, 0);
+            assert(b.lit && b.bottom <= 480 - 87 && b.bottom > 480 - 107);
+            assert(t.lit && t.bottom <= 120 - 26 && t.bottom > 120 - 30);
+        }
+        native_aspect = 0;
     }
 #endif
+    /* 5:4 Framing (native 3:2 on each camera): left of its right bar, which
+       is narrower than the 1:1 bar. 1:1 is a crop too: its stamp stays left
+       of the wider 1:1 bar. */
+    {
+        struct box crop, off, square;
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 3;
+        picture_encode(0, MESSAGE);
+        off = changes(1, 0);
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 3;
+        header[GRKIT_HOST_FRAME_RATIO / 4] = 6;
+        picture_encode(0, MESSAGE);
+        crop = changes(1, 0);
+        {
+            struct box th = changes(2, 0);
+            assert(th.lit && th.right <= 160 - 6 && th.left > 80);
+        }
+        assert(crop.lit && crop.right <= 720 - 60 && crop.left > 360 && crop.top > 240);
+        assert(crop.right < off.right);
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 3;
+        header[GRKIT_HOST_FRAME_RATIO / 4] = 5;
+        picture_encode(0, MESSAGE);
+        square = changes(1, 0);
+        {
+            struct box th = changes(2, 0);
+            assert(th.lit && th.right <= 160 - 20 && th.left > 80);
+        }
+        assert(square.lit && square.right <= 720 - 120 && square.left > 360 && square.top > 240);
+        assert(square.right < crop.right);
+        /* 7:6: between the 5:4 and the 1:1 bars, 80 pixels and 10 in the
+           thumbnail. */
+        {
+            struct box seven, th;
+            encode_setup();
+            fill_planes(40, 128, 128);
+            STAMP_STYLE = 3;
+            header[GRKIT_HOST_FRAME_RATIO / 4] = 7;
+            picture_encode(0, MESSAGE);
+            seven = changes(1, 0);
+            th = changes(2, 0);
+            assert(th.lit && th.right <= 160 - 10 && th.right > 160 - 20 && th.left > 80);
+            assert(seven.lit && seven.right <= 720 - 80 && seven.left > 360 && seven.top > 240);
+            assert(seven.right < crop.right && seven.right > square.right);
+        }
+    }
     /* A monochrome GRKit effect keeps neutral chroma: the stamp lights only Y. */
     encode_setup();
     fill_planes(40, 128, 128);
-    header[GRKIT_HOST_STAMP / 4] = 1;
+    STAMP_STYLE = 1;
     still(record(2));
     WORD(record(2), GRKIT_RECORD_MONOCHROME) = 1;
     picture_encode(0, MESSAGE);
     for (u32 i = 0; i < 3; ++i) { struct box b = changes(i, 1); assert(b.lit && b.lighter && !b.orange); }
-    /* Every imported digit renderer stays bounded and neutral in monochrome,
-       including the new day-first date/time format and preview planes. */
-    for(u32 look=0;look<3;++look) for(u32 style=1;style<=7;++style) {
-        encode_setup();fill_planes(40,128,128);
-        header[GRKIT_HOST_STAMP/4]=style;header[GRKIT_HOST_STAMP_LOOK/4]=look;
-        still(record(2));WORD(record(2),GRKIT_RECORD_MONOCHROME)=1;
-        picture_encode(0,MESSAGE);
-        for(u32 plane=0;plane<3;++plane) {struct box b=changes(plane,1);assert(b.lit && (style==6 ? !b.lighter : b.lighter) && !b.orange);}
+    /* Its light is white: brighter in luma than the amber light of a color picture. */
+    assert(changes(0, 1).lift > dark_lift);
+    /* A native monochrome Image Control type of the shot also keeps neutral
+       chroma. A GRKit record decides over the native type. */
+    {
+        static const uint8_t mono[] = {13, 14, 15, 16
+#ifdef FRAMING_XPAN_NATIVE
+            , 25, 26, 27, 28, 29, 30
+#endif
+#ifdef NATIVE_MONOCHROME_TYPES_HIGH
+            , 31, 32
+#endif
+        };
+        static const uint8_t color[] = {11, 12, 17, 22
+#ifdef FRAMING_XPAN_NATIVE
+            , 23, 24
+#endif
+        };
+        for (u32 i = 0; i < sizeof(mono); ++i) {
+            encode_setup();
+            fill_planes(40, 128, 128);
+            STAMP_STYLE = 1;
+            BYTE(SHOT, SETTINGS_IC_TYPE) = mono[i];
+            picture_encode(0, MESSAGE);
+            for (u32 j = 0; j < 3; ++j) { struct box b = changes(j, 1); assert(b.lit && b.lighter && !b.orange); }
+        }
+        for (u32 i = 0; i < sizeof(color); ++i) {
+            encode_setup();
+            fill_planes(40, 128, 128);
+            STAMP_STYLE = 1;
+            BYTE(SHOT, SETTINGS_IC_TYPE) = color[i];
+            picture_encode(0, MESSAGE);
+            assert(changes(0, 0).orange);
+        }
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 1;
+        BYTE(SHOT, SETTINGS_IC_TYPE) = 13;
+        still(record(2));
+        picture_encode(0, MESSAGE);
+        assert(changes(0, 0).orange);
     }
-    {static const u8 dt[6]={2026&255,2026>>8,10,17,9,5};char text[20];u32 n=date_text(text,dt,7);const char *expected="17 10 '26  9:05";assert(n==strlen(expected) && !memcmp(text,expected,n));}
+    /* The GR1s look prints yellow dots on a color picture, as GR1s color
+       negatives show them, and white dots on a monochrome one. */
+    {
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 1;
+        STAMP_LOOK = 1;
+        picture_encode(0, MESSAGE);
+        struct box b = changes(0, 0);
+        assert(b.lit && b.lighter && b.yellow && !b.orange && b.left > planes[0].width / 3);
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 1;
+        STAMP_LOOK = 1;
+        BYTE(SHOT, SETTINGS_IC_TYPE) = 13;
+        picture_encode(0, MESSAGE);
+        for (u32 j = 0; j < 3; ++j) { struct box m = changes(j, 1); assert(m.lit && m.lighter && !m.orange); }
+        /* The dots end about 19% of the short side before the right edge and
+           8.3% above the bottom, as on the prints of the GR1s: 91 and 39
+           pixels on the 720 x 480 main picture. The halo reaches a little
+           further. */
+        struct box d = changes(1, 1);
+        /* "'26 10 17" spans 80 x 17 pixels with its halo: digits advance 7
+           columns, as on the prints. */
+        assert(d.right - d.left >= 76 && d.right - d.left <= 84 && d.bottom - d.top >= 15 && d.bottom - d.top <= 19);
+        assert(d.right <= 720 - 91 + 4 && d.right > 720 - 91 - 4);
+        assert(d.bottom <= 480 - 39 + 4 && d.bottom > 480 - 39 - 4);
+    }
+    /* The GR II look paints flat GR II orange (Y 146, Cb 46, Cr 225) in its
+       16 x 24 cells: on a 720 x 480 picture one glyph pixel is one pixel. The
+       text ends 3 cells before the right edge, and the ink rows end 51 rows
+       above the bottom. A monochrome picture gets white luma only. */
+    {
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 1;
+        STAMP_LOOK = 2;
+        picture_encode(0, MESSAGE);
+        const struct test_plane *p = &planes[1];
+        struct box b = changes(1, 0);
+        /* "2026/10/17": ten cells end at 720 - 48. */
+        assert(b.lit && b.right <= 720 - 48 && b.right > 720 - 48 - 16);
+        assert(b.left >= 720 - 16 * 13 && b.left < 720 - 16 * 13 + 16);
+        assert(b.top == 480 - 72 + 3 && b.bottom == 480 - 72 + 21);
+        u32 flat = 0;
+        for (u32 y = b.top; y < b.bottom; ++y) for (u32 x = b.left; x < b.right; ++x) {
+            uint8_t luma = BYTE(p->y, y * p->pitch + x);
+            assert(luma == 40 || luma == 146);
+            if (luma == 146) {
+                ++flat;
+                assert(BYTE(p->c, y * p->pitch + (x & ~1u)) == 46 && BYTE(p->c, y * p->pitch + (x | 1)) == 225);
+            }
+        }
+        assert(flat > 100);
+        /* The main picture and the thumbnail get the stamp at the same place. */
+        assert(changes(0, 0).lit && changes(2, 0).lit);
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 1;
+        STAMP_LOOK = 2;
+        BYTE(SHOT, SETTINGS_IC_TYPE) = 13;
+        picture_encode(0, MESSAGE);
+        for (u32 j = 0; j < 3; ++j) { struct box m = changes(j, 1); assert(m.lit && m.lighter && !m.orange); }
+        /* On a larger main picture the glyph pixels scale with the short
+           side, as the GR II imprint on its 3264 rows: a 6000 x 4000 main
+           picture gets 3.68 pixels for each glyph pixel. The 720 x 480 plane
+           samples that geometry: the ink rows lie at main rows 3746 to 3812,
+           and the text ends at main column 6000 - 48 * 3.68. */
+        {
+            static const Plane main = {0, 0, 6000, 4000, 6000, 1, 0, 0, 6000, 4000};
+            Plane small = {planes[1].y, planes[1].c, 720, 480, planes[1].pitch, 0, 0, 0, 720, 480};
+            encode_setup();
+            fill_planes(40, 128, 128);
+            gr2_paint(&small, &main, "2026/10/17", 10, 0, 0);
+            struct box g = changes(1, 0);
+            assert(g.lit && g.top >= 449 && g.top <= 450 && g.bottom >= 457 && g.bottom <= 459);
+            assert(g.right <= 699 && g.right >= 696);
+            assert(g.left >= 720 - 16 * 13 * 3676 / 8333 - 2 && g.left <= 720 - 16 * 13 * 3676 / 8333 + 8);
+        }
+        /* An unknown look prints the classic digits. */
+        encode_setup();
+        fill_planes(40, 128, 128);
+        STAMP_STYLE = 1;
+        STAMP_LOOK = 7;
+        picture_encode(0, MESSAGE);
+        assert(changes(0, 0).orange);
+        STAMP_LOOK = 0;
+    }
     /* Unusable descriptors are skipped. */
     encode_setup();
-    header[GRKIT_HOST_STAMP / 4] = 1;
+    STAMP_STYLE = 1;
     HALF(WORD(CONFIG, 0x3c), 0x14) = 500;
     WORD(CONFIG, 0x40) = 0;
     HALF(WORD(CONFIG, 0x44), 0x10) = 161;
@@ -619,7 +920,7 @@ int main(void)
     /* The largest picture draws the stamp and the previews scale its mask, so
        the stamp keeps its place and total width when playback switches from the
        screennail to the main picture. */
-    for (u32 style = 1; style <= 4; ++style) {
+    for (u32 style = 1; style <= DATE_STAMP_STYLE_MAX; ++style) {
         reset();
         WORD(MESSAGE, 8) = CONFIG;
         picture(0, 1200, 800, 1216, PLANES);
@@ -628,7 +929,7 @@ int main(void)
         WORD(CONFIG, 0x48) = WORD(CONFIG, 0x3c); WORD(CONFIG, 0x58) = WORD(CONFIG, 0x4c);
         flushes = 0; native_aspect = 0;
         fill_planes(40, 128, 128);
-        header[GRKIT_HOST_STAMP / 4] = style;
+        STAMP_STYLE = style;
         picture_encode(0, MESSAGE);
         struct box big = changes(0, 0), sn = changes(1, 0), th = changes(2, 0);
         assert(big.lit && big.lighter && big.orange && sn.lit && sn.lighter && th.lit && th.lighter);
@@ -689,7 +990,7 @@ int main(void)
     /* The stamp draws after selective color, so it keeps its orange. */
     encode_setup();
     fill_planes(40, 128, 128);
-    header[GRKIT_HOST_STAMP / 4] = 1;
+    STAMP_STYLE = 1;
     still(record(0));
     keep_red(record(0));
     picture_encode(0, MESSAGE);
@@ -725,11 +1026,11 @@ int main(void)
         picture_encode(0, MESSAGE);
         assert((changes(0, 0).lit != 0) == (k < 2));
     }
-    /* A plugin that PLUGINS.TXT does not install encodes nothing. */
+    /* Without the Date Imprint module, a stored style encodes nothing. */
     encode_setup();
     fill_planes(40, 128, 128);
-    header[GRKIT_HOST_STAMP / 4] = 1;
-    header[GRKIT_HOST_PLUGINS / 4] &= ~(1U << PLUGIN_DATE_STAMP);
+    STAMP_STYLE = 1;
+    date_module(0);
     picture_encode(0, MESSAGE);
     assert(flushes == 0);
     for (u32 i = 0; i < 3; ++i) assert(changes(i, 0).lit == 0);

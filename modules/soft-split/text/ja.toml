@@ -1,0 +1,9 @@
+title = "Split toning"
+rows = ["Off", "Warm Cream", "Amber / Rose", "Cocoa / Cream", "Sepia", "Warm Shadows", "Blue / Amber", "Teal / Rose", "Cool Shadows"]
+
+[settings.PRESET]
+label = "Style"
+
+[settings.STRENGTH]
+label = "Strength"
+values = ["Off", "5%", "10%", "15%", "20%", "25%", "30%", "35%", "40%", "45%", "50%", "55%", "60%", "65%", "70%", "75%", "80%", "85%", "90%", "95%", "100%"]

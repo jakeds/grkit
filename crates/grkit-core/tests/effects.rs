@@ -51,23 +51,27 @@ fn starter_definitions_match_existing_golden_bytes() {
 #[test]
 fn host_artwork_matches_golden_pixels_and_preserves_binary_transparency() {
     assert_eq!(
-        hex::encode(Sha256::digest(artwork::plugins_pixels())),
+        hex::encode(Sha256::digest(artwork::grkit_pixels())),
         "c007c55d54d8ce0c15106203045cd5b034509f70d7957582a21d94ee692210c4"
     );
-    let modules = grkit_core::plugins::tiles();
-    // Control and category symbols, addressed by offset from the first.
-    assert_eq!(modules.len(), 18);
-    assert_eq!(modules[0], artwork::soft_symbol("looks"));
-    assert_eq!(modules[1], artwork::soft_symbol("group-frame"));
-    assert_eq!(modules[2], artwork::soft_symbol("group-tone"));
-    for (i, a) in modules.iter().enumerate() {
-        assert!(
-            modules[..i].iter().all(|b| a != b),
-            "Soft symbols must be distinct"
-        );
+    assert_eq!(
+        hex::encode(Sha256::digest(artwork::version_pixels())),
+        "4119d11482f7f7a0636d481beae529aa4d87a4ec8d4afc62c2d8d4c8b295b0c6"
+    );
+    // The tiles of the module folders keep the rules of the host artwork.
+    let mut modules: Vec<Vec<u8>> = Vec::new();
+    for entry in std::fs::read_dir(root().join("../modules")).unwrap() {
+        let tiles = entry.unwrap().path().join("tiles");
+        for tile in std::fs::read_dir(tiles).into_iter().flatten() {
+            let png = std::fs::read(tile.unwrap().path()).unwrap();
+            let (width, height, rgba) = grkit_core::png::decode_rgba8(&png).unwrap();
+            assert_eq!((width, height), (40, 40));
+            modules.push(rgba);
+        }
     }
     for pixels in [
-        artwork::plugins_pixels(),
+        artwork::grkit_pixels(),
+        artwork::version_pixels(),
         artwork::off_pixels(),
         artwork::render_tile("OFF", "film").unwrap(),
         artwork::render_tile("OFF", "filter").unwrap(),
@@ -96,6 +100,7 @@ fn user_definition_preserves_edited_name_and_creative_curve() {
     definition["curves"][0][100] = json!(0);
     let (compiled, _) =
         effects::decode(&effects::compile_definition(&definition).unwrap()).unwrap();
+    let compiled = compiled.to_json();
     assert_eq!(compiled["name"], "My Portrait");
     assert_eq!(compiled["curves"], definition["curves"]);
     assert_eq!(compiled["matrix"], definition["matrix"]);
@@ -117,10 +122,14 @@ fn cube_fits_record_their_pinned_luts() {
         if attribution["origin"] != "cube-fit" {
             continue;
         }
+        // A .cube LUT, or a HaldCLUT image, named after the effect.
         let source = attribution["source"].as_str().unwrap();
-        assert_eq!(
-            source,
-            format!("{}.cube", definition["effect_id"].as_str().unwrap())
+        let id = definition["effect_id"].as_str().unwrap();
+        assert!(
+            [".cube", ".png"]
+                .iter()
+                .any(|extension| source == format!("{id}{extension}")),
+            "{source}"
         );
         let lut = &luts[source];
         assert_eq!(lut["sha256"], attribution["source_sha256"], "{source}");
@@ -141,7 +150,9 @@ fn round_trip_preserves_layout_and_nonmonotone_curves() {
     assert_eq!(bytes.len(), 8192);
     assert_eq!(&bytes[..8], b"GRFX0001");
     assert_eq!(&bytes[1684..8084], &icon);
-    assert_eq!(effects::decode(&bytes).unwrap(), (effect, icon));
+    let (decoded, decoded_icon) = effects::decode(&bytes).unwrap();
+    assert_eq!((decoded.to_json(), &decoded_icon), (effect, &icon));
+    assert_eq!(decoded.encode(&decoded_icon).unwrap(), bytes);
 }
 
 #[test]
@@ -186,7 +197,8 @@ fn monochrome_requires_identical_rows_and_channels() {
     assert_eq!(
         effects::decode(&effects::encode(&effect, &icon).unwrap())
             .unwrap()
-            .0,
+            .0
+            .to_json(),
         effect
     );
     effect["curves"][1][3] = json!(193);
@@ -222,7 +234,8 @@ fn default_flags_and_filename_contract() {
     assert_eq!(
         effects::decode(&effects::encode(&effect, &vec![0; effects::ICON_SIZE]).unwrap())
             .unwrap()
-            .0["flags"],
+            .0
+            .flags,
         0
     );
     let filename = effects::filename("custom-v1").unwrap();
@@ -306,12 +319,59 @@ fn cover_icons_span_the_tile_width_inside_the_row_margin() {
 }
 
 #[test]
+fn covers_without_a_number_show_a_large_name() {
+    // Below the brand band, only the name is light on a box without a band.
+    let rows = |pixels: &[u8]| -> Vec<usize> {
+        (12..40)
+            .filter(|y| (0..40).any(|x| pixels[(y * 40 + x) * 4] > 128))
+            .collect()
+    };
+    let large = artwork::render_box("Kodak", "PORTRA", "", false).unwrap();
+    let small = artwork::render_box("Kodak", "PORTRA", "400", false).unwrap();
+    assert_ne!(large, small);
+    let large_rows = rows(&large);
+    // Taller than the 5-pixel font, inside the body, and centered within one row.
+    assert!(large_rows.len() >= 8, "{large_rows:?}");
+    assert!(
+        large_rows.iter().all(|y| (12..37).contains(y)),
+        "{large_rows:?}"
+    );
+    let middle = (large_rows[0] + large_rows[large_rows.len() - 1]) as f32 / 2.0;
+    assert!((middle - 24.5).abs() <= 1.5, "{middle}");
+    // A long name gets a smaller size and still fills no more than the body.
+    for name in [
+        "KODACHROME",
+        "TEAL ORANGE",
+        "MMMMMMMMMMMM",
+        "classic chrome"[..12].trim(),
+    ] {
+        let pixels = artwork::render_box("Kodak", name, "", false).unwrap();
+        let used = rows(&pixels);
+        assert!(
+            !used.is_empty() && used.iter().all(|y| (12..37).contains(y)),
+            "{name}: {used:?}"
+        );
+    }
+    // With a number, a name too wide for the pixel font, or with lowercase, gets a smaller
+    // Roboto Condensed Black on the name row. A name that fits keeps the pixel font.
+    // The condensed font fits every name of 12 characters.
+    for name in ["TEAL ORANGE", "VISION 2383", "Portra", "WWWWWWWWWWWW"] {
+        assert!(
+            artwork::render_box("Kodak", name, "400", true).is_ok(),
+            "{name}"
+        );
+    }
+    let error = artwork::render_box("Kodak", "PORTRA", "WWWWWWWWWWWW", true).unwrap_err();
+    assert!(format!("{error:#}").contains("does not fit"), "{error:#}");
+    // Lowercase works only in Roboto Condensed Black.
+    assert!(artwork::render_box("Kodak", "Portra", "", true).is_ok());
+}
+
+#[test]
 fn compiler_rejects_cover_icons_that_do_not_fit() {
     let definition = read_json(root().join("portra-400-endura-v1/effect.json"));
     let box_icon = definition["icon"].clone();
     for (key, value) in [
-        ("name", json!("WWWWWWWWWWW")),
-        ("name", json!("Portra")),
         ("name", json!("")),
         ("number", json!("1234567")),
         ("number", json!("é")),
@@ -327,7 +387,14 @@ fn compiler_rejects_cover_icons_that_do_not_fit() {
         );
     }
     let mut changed = definition.clone();
+    // A cover without a number shows a large name.
     changed["icon"] = json!({"template": "cine", "brand": "Kodak", "name": "VISION3"});
+    assert_eq!(
+        effects::icon_pixels(&changed["icon"]).unwrap(),
+        artwork::render_cine("Kodak", "VISION3", "").unwrap()
+    );
+    changed["icon"] =
+        json!({"template": "box", "brand": "Kodak", "name": "PORTRA", "number": "", "band": true});
     assert!(effects::compile_definition(&changed).is_err());
     changed["icon"] = json!({"template": "cine", "brand": "Kodak", "name": "VISION3", "number": "250D", "band": true});
     assert!(effects::compile_definition(&changed).is_err());
@@ -369,11 +436,11 @@ fn selective_color_compiles_to_kernel_integers_and_round_trips() {
     assert!(blob[120..128].iter().all(|v| *v == 0));
     let (effect, icon) = effects::decode(&blob).unwrap();
     assert_eq!(
-        effect["selective_color"],
+        effect.selective.unwrap().to_json(),
         json!({"direction_q12": [-1306, 3882], "lower_tan_q8": [93, 179],
                "higher_tan_q8": [27, 64], "chroma": [6, 16]})
     );
-    assert_eq!(effects::encode(&effect, &icon).unwrap(), blob);
+    assert_eq!(effect.encode(&icon).unwrap(), blob);
 }
 
 #[test]
@@ -418,6 +485,9 @@ fn words(text: &str) -> Vec<String> {
     words
 }
 
+/// A cover icon shows the words of the effect name. A motion picture film can
+/// show its film number, which its target names, in place of the series name:
+/// Vision3 500T shows 5219 above 500T.
 #[test]
 fn published_cover_icons_show_the_words_of_the_effect_name() {
     for entry in fs::read_dir(root()).unwrap() {
@@ -429,15 +499,105 @@ fn published_cover_icons_show_the_words_of_the_effect_name() {
         let icon = &definition["icon"];
         let name = definition["name"].as_str().unwrap();
         assert!(icon.get("template").is_some(), "{name} has no cover icon");
-        let shown = format!(
-            "{} {}",
+        // A cover without a number shows the name large, as Instax does.
+        let (series, number) = (
             icon["name"].as_str().unwrap(),
-            icon["number"].as_str().unwrap()
+            icon["number"].as_str().unwrap_or(""),
         );
-        assert_eq!(words(&shown), words(name), "{name}");
+        if icon["template"] == "cine" && series.bytes().all(|c| c.is_ascii_digit()) {
+            let target = definition["attribution"]["target"].as_str().unwrap();
+            assert!(
+                target.split(' ').any(|word| word == series),
+                "{name}: {target}"
+            );
+            assert_eq!(name.rsplit(' ').next(), Some(number), "{name}");
+        } else {
+            assert_eq!(words(&format!("{series} {number}")), words(name), "{name}");
+        }
         assert!(
-            ["Kodak", "FUJIFILM"].contains(&icon["brand"].as_str().unwrap()),
+            ["Kodak", "FUJIFILM", "ILFORD"].contains(&icon["brand"].as_str().unwrap()),
             "{name}"
+        );
+    }
+}
+
+#[test]
+fn overlay_labels_fit_their_area_and_outline_their_text() {
+    let table = artwork::overlay_labels();
+    assert!(table.len() <= grkit_core::abi::LABELS_SIZE);
+    assert_eq!(table.len() % 4, 0);
+    let field = |at: usize, bytes: usize| {
+        let mut value = 0usize;
+        for (index, byte) in table[at..at + bytes].iter().enumerate() {
+            value |= usize::from(*byte) << (8 * index);
+        }
+        value
+    };
+    for index in 0..artwork::OVERLAY_LABELS.len() {
+        let (width, height, pixels) = artwork::overlay_label_pixels(&table, index);
+        assert_eq!(
+            (width, height),
+            (field(index * 8, 2), field(index * 8 + 2, 2))
+        );
+        assert_eq!(height, artwork::OVERLAY_LABEL_HEIGHT);
+        // A Framing label at the left of the row ends before the centered
+        // load cue starts.
+        let widest = if index == 0 { 200 } else { 80 };
+        assert!(
+            (30..=widest).contains(&width),
+            "label {index} is {width} wide"
+        );
+        // White text, its black outline, and transparent pixels.
+        for value in [0, 1, 255] {
+            assert!(pixels.contains(&value), "label {index} lacks {value}");
+        }
+        // The outline separates the text from the live view on every side.
+        for y in 0..height {
+            for x in 0..width {
+                if pixels[y * width + x] <= 1 {
+                    continue;
+                }
+                assert!(x > 0 && y > 0 && x + 1 < width && y + 1 < height);
+                for (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
+                    assert_ne!(pixels[ny * width + nx], 0, "label {index} at {x},{y}");
+                }
+            }
+        }
+    }
+    let cue = field(0, 2);
+    let widest = (1..artwork::OVERLAY_LABELS.len())
+        .map(|index| field(index * 8, 2))
+        .max()
+        .unwrap();
+    assert!(7 + widest < 360 - cue / 2);
+}
+
+/// Label n names the CORE.ASPECT value n (LABEL_RATIO in runtime/sdk/grkit.h):
+/// it starts the summary of value n of the Framing module. The Date Imprint
+/// sign follows the ratios (LABEL_DATE).
+#[test]
+fn overlay_labels_follow_the_aspect_values() {
+    let aspect = grkit_core::capabilities::CAPABILITIES
+        .iter()
+        .find(|capability| capability.key == "ASPECT")
+        .unwrap();
+    assert_eq!(artwork::OVERLAY_LABELS.len(), aspect.values as usize + 1);
+    assert_eq!(artwork::OVERLAY_LABELS[aspect.values as usize], "DATE");
+    let text = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../modules/framing/text/en.toml"),
+    )
+    .unwrap();
+    // A TOML array of strings is also a JSON array.
+    let line = text
+        .lines()
+        .find_map(|line| line.strip_prefix("summaries = "))
+        .unwrap();
+    let summaries: Vec<String> = serde_json::from_str(line).unwrap();
+    assert_eq!(summaries.len(), aspect.values as usize);
+    for (value, summary) in summaries.iter().enumerate().skip(1) {
+        assert!(
+            summary.starts_with(artwork::OVERLAY_LABELS[value]),
+            "label {value}"
         );
     }
 }

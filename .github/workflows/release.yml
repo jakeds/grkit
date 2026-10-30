@@ -1,7 +1,7 @@
 name: Release
 
-# Builds one release from its tag: the site, the device-test packages, and a draft
-# GitHub release that holds both. Merging the release pull request tags the merge
+# Builds one release from its tag: the site, a package for each camera, the
+# firmware dump tool, and a draft GitHub release that holds them. Merging the release pull request tags the merge
 # commit and starts this workflow. Then the Deploy workflow publishes the site and
 # the release. See docs/releasing.md.
 on:
@@ -104,8 +104,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       FIRMWARE_BASE_URL: https://www.ricoh-imaging.co.jp/resources/japan/support/download/digital/FIRMWARE
-      GR3_ZIP_SHA256: e895b439e4b3b96ac04f50072f02a63061ec7de5dcc1b070890baa09bc659470
-      GR4_ZIP_SHA256: ded47aa6385886e4b1f8f41f8551866ab0f1ecd0aef89934a43ef0e456539e8f
       # A private repository holds the same zips as release assets, one tag for each
       # target. See docs/releasing.md.
       FIRMWARE_BACKUP_REPO: ${{ vars.FIRMWARE_BACKUP_REPO }}
@@ -161,15 +159,16 @@ jobs:
           firmware="$RUNNER_TEMP/firmware"
           mkdir "$firmware"
           trap 'rm -rf "$firmware"' EXIT
-          # fetch ZIP SHA256 TAG: download an official zip, or its backup, into $firmware.
+          # fetch ZIP SHA256 TAG OFFICIAL: download an official zip, or its backup, into $firmware.
+          # A zip that Ricoh does not publish (OFFICIAL false) comes only from the backup.
           fetch() {
             zip="$firmware/$1"
             sum="$2"
             check() { echo "$sum  $zip" | sha256sum --check --strict; }
-            if [ "$FIRMWARE_SOURCE" = backup ] \
+            if [ "$FIRMWARE_SOURCE" = backup ] || [ "$4" != true ] \
               || ! curl --fail --location --silent --show-error --retry 3 -o "$zip" "$FIRMWARE_BASE_URL/$1" \
               || ! check; then
-              if [ "$FIRMWARE_SOURCE" != backup ]; then
+              if [ "$FIRMWARE_SOURCE" != backup ] && [ "$4" = true ]; then
                 echo "::warning::The Ricoh download of $1 failed or changed. The build uses the private backup."
               fi
               if [ -z "$FIRMWARE_BACKUP_REPO" ] || [ -z "$BACKUP_TOKEN" ]; then
@@ -182,20 +181,33 @@ jobs:
               check
             fi
           }
-          fetch gr3_v210.zip "$GR3_ZIP_SHA256" gr3-2.10
-          fetch gr4_v111.zip "$GR4_ZIP_SHA256" gr4-1.11
-          unzip -q "$firmware/gr3_v210.zip" fwdc239b.bin -d "$firmware"
-          unzip -q "$firmware/gr4_v111.zip" fwdc248b.bin -d "$firmware"
-          target/release/grkit build --target gr3-2.10 --firmware "$firmware/fwdc239b.bin" \
-            --out "$RUNNER_TEMP/runtime-gr3" --clang clang-21 --lld ld.lld-21
-          target/release/grkit build --target gr4-1.11 --firmware "$firmware/fwdc248b.bin" \
-            --out "$RUNNER_TEMP/runtime-gr4" --clang clang-21 --lld ld.lld-21
-          target/release/grkit site --build "$RUNNER_TEMP/runtime-gr3" --out site
-          target/release/grkit site --build "$RUNNER_TEMP/runtime-gr4" --out site
-          target/release/grkit effects publish --source effects --firmware "$firmware/fwdc239b.bin" \
-            --out site/effects/gr3-2.10
-          target/release/grkit effects publish --source effects --target gr4-1.11 \
-            --firmware "$firmware/fwdc248b.bin" --out site/effects/gr4-1.11
+          # `grkit release-plan` lists each runtime build with its firmware download
+          # (`grkit_build::target`) and each camera package (`camera.rs`).
+          target/release/grkit release-plan > "$RUNNER_TEMP/release-plan.json"
+          jq -r '.runtimes[] | [.target, .zip, .zip_sha256, .file, .official] | @tsv' \
+            "$RUNNER_TEMP/release-plan.json" > "$RUNNER_TEMP/runtimes.tsv"
+          # The loop reads the plan from descriptor 3, so no command in it reads the plan.
+          while IFS=$'\t' read -r target archive archive_sum file official <&3; do
+            fetch "$archive" "$archive_sum" "$target" "$official"
+            # Two GR IV zips hold a firmware file of the same name.
+            mkdir "$firmware/$target"
+            unzip -q "$firmware/$archive" "$file" -d "$firmware/$target"
+            target/release/grkit build --target "$target" --firmware "$firmware/$target/$file" \
+              --out "$RUNNER_TEMP/runtime-$target" --clang clang-21 --lld ld.lld-21
+            target/release/grkit site --build "$RUNNER_TEMP/runtime-$target" --out site
+            target/release/grkit effects publish --source effects --target "$target" \
+              --firmware "$firmware/$target/$file" --out "site/effects/$target"
+          done 3< "$RUNNER_TEMP/runtimes.tsv"
+      - name: Build the official modules
+        run: |
+          # Each module builds once for every camera and needs no firmware.
+          mkdir -p site/modules
+          for folder in modules/*/; do
+            id=$(target/release/grkit module build --dir "$folder" --out "$RUNNER_TEMP/module.GRM" \
+              --objects "$RUNNER_TEMP/module-objects" --clang clang-21 --lld ld.lld-21 | jq -r .id)
+            mv "$RUNNER_TEMP/module.GRM" "site/modules/$id.GRM"
+            rm -rf "$RUNNER_TEMP/module-objects"
+          done
       - name: Build the installation guides
         run: |
           sh .github/scripts/install-guide-tools.sh "$RUNNER_TEMP/guide-tools"
@@ -210,16 +222,32 @@ jobs:
             fi
           done
           cp -R web/dist/. site/
-      - name: Package the published runtime for device testing
+      # Release assets are GRKit-<version>-<use>. A camera package holds the
+      # published runtime, each effect, and each official module, as the site
+      # does.
+      - name: Package the published runtime for each camera
         run: |
-          mkdir "$RUNNER_TEMP/no-effects"
-          for pair in gr3:gr3-2.10 gr3x:gr3-2.10 gr4:gr4-1.11; do
-            camera="${pair%%:*}"
-            target/release/grkit package --build "site/runtime/${pair#*:}" --camera "$camera" \
-              --effects "$RUNNER_TEMP/no-effects" --guide "site/guides/$camera/en.pdf" \
-              --out "GRKit-device-test-$camera.zip"
-            target/release/grkit verify "GRKit-device-test-$camera.zip"
+          version="${TAG#v}"
+          target/release/grkit effects build --source effects --out "$RUNNER_TEMP/effects"
+          # Each camera has one package with the runtime of each of its builds.
+          jq -r '.packages[] | [.camera, .name, (.targets | join(" "))] | @tsv' \
+            "$RUNNER_TEMP/release-plan.json" > "$RUNNER_TEMP/packages.tsv"
+          modules=()
+          for module in site/modules/*.GRM; do
+            modules+=(--module "$module")
           done
+          while IFS=$'\t' read -r camera use targets <&3; do
+            builds=()
+            for target in $targets; do
+              builds+=(--build "site/runtime/$target")
+            done
+            target/release/grkit package "${builds[@]}" "${modules[@]}" --camera "$camera" \
+              --effects "$RUNNER_TEMP/effects" --guide "site/guides/$camera/en.pdf" \
+              --out "GRKit-$version-$use.zip"
+            target/release/grkit verify "GRKit-$version-$use.zip"
+          done 3< "$RUNNER_TEMP/packages.tsv"
+      - name: Build the firmware dump tool
+        run: target/release/grkit dump --out "GRKit-${TAG#v}-dump.zip" --clang clang-21 --lld ld.lld-21
       - name: Check the version of each runtime
         run: |
           for manifest in site/runtime/*/build.json; do
@@ -237,8 +265,8 @@ jobs:
           retention-days: 3
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: device-test
-          path: GRKit-device-test-*.zip
+          name: packages
+          path: GRKit-*.zip
           if-no-files-found: error
           retention-days: 3
 
@@ -262,8 +290,8 @@ jobs:
           path: site
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: device-test
-          path: device-test
+          name: packages
+          path: packages
       - name: Create or update the draft release
         run: |
           set -euo pipefail
@@ -280,10 +308,11 @@ jobs:
             fi
             gh release create "$TAG" --verify-tag --draft --title "GRKit $TAG" "${notes[@]}"
           fi
-          tar -czf "$RUNNER_TEMP/site.tar.gz" -C site .
-          gh release upload "$TAG" "$RUNNER_TEMP/site.tar.gz" device-test/GRKit-device-test-*.zip --clobber
+          site="$RUNNER_TEMP/GRKit-${TAG#v}-site.tar.gz"
+          tar -czf "$site" -C site .
+          gh release upload "$TAG" "$site" packages/GRKit-*.zip --clobber
       - name: Summary
-        run: echo "The draft release $TAG holds the site and the device-test packages." >> "$GITHUB_STEP_SUMMARY"
+        run: echo "The draft release $TAG holds the site, the camera packages, and the dump tool." >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     needs: [tag, publish]

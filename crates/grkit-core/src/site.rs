@@ -8,11 +8,16 @@ use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-use crate::cube::{self, Matrix};
+use crate::cube::{self, Encoding};
+use crate::effects::{self, Effect};
 use crate::fit::{self, Model, Params};
 use crate::selective::{self, Selective};
-use crate::{effects, packaging, Files};
+use crate::{hue, packaging, Files};
 
+/// The runtime build whose catalog the site shows. Its Standard base gamma is also the
+/// one that `grkit effects import` reads from the firmware, so the CLI and the site fit
+/// imported LUTs over the same table.
+pub const PREVIEW_TARGET: &str = "gr3-2.10";
 /// Points on each axis of a preview table.
 pub const LUT_SIZE: usize = 33;
 pub const CATALOG_SCHEMA: &str = "grkit-site-effects-v1";
@@ -24,95 +29,57 @@ fn unit(m: &[i16; 9]) -> [f64; 9] {
     m.map(|v| v as f64 / 8192.0)
 }
 
-fn coefficients<const N: usize>(value: &Value, what: &str) -> Result<[i64; N]> {
-    let values = value
-        .as_array()
-        .filter(|v| v.len() == N)
-        .with_context(|| format!("Expected {N} {what} values"))?;
-    let mut result = [0; N];
-    for (slot, value) in result.iter_mut().zip(values) {
-        *slot = value
-            .as_i64()
-            .with_context(|| format!("Expected integer {what} values"))?;
-    }
-    Ok(result)
+/// The effect ID of the file name sample in the generated module.
+const FILENAME_SAMPLE: &str = "velvia-100-v1";
+
+/// The constants that the site shares with the packager, as a TypeScript module.
+pub fn generated() -> Vec<(&'static str, String)> {
+    let filename = effects::filename(FILENAME_SAMPLE).expect("a valid sample ID");
+    let module = format!(
+        "// Generated from crates/grkit-core/src/site.rs. Do not edit: change the\n\
+         // constants there, then run\n\
+         // GRKIT_UPDATE_GENERATED=1 cargo test -p grkit-core --test generated.\n\n\
+         /** The target whose effects and previews the site shows. */\n\
+         export const PREVIEW_TARGET = '{PREVIEW_TARGET}';\n\n\
+         /** The effects that one package can hold. */\n\
+         export const MAX_EFFECTS = {};\n\n\
+         /** The schema of the effect catalog of each target. */\n\
+         export const CATALOG_SCHEMA = '{CATALOG_SCHEMA}';\n\n\
+         /** The longest effect name and the longest effect ID (effects.rs). */\n\
+         export const EFFECT_NAME_MAX = {};\n\
+         export const EFFECT_ID_MAX = {};\n\n\
+         /** An effect ID and the name of its GRF file in a package (effects::filename). */\n\
+         export const EFFECT_FILENAME_SAMPLE = {{ id: '{FILENAME_SAMPLE}', filename: '{filename}' }} as const;\n",
+        crate::runtime::MAX_COUNT,
+        effects::NAME_MAX,
+        effects::ID_MAX,
+    );
+    vec![("web/src/generated/site.ts", module)]
 }
 
 /// The model parameters of a decoded effect.
-pub fn params(effect: &Value) -> Result<Params> {
-    let q13 = |value: &Value| -> Result<[f64; 9]> {
-        Ok(unit(&coefficients::<9>(value, "matrix")?.map(|v| v as i16)))
-    };
-    let curves = effect["curves"]
-        .as_array()
-        .filter(|c| c.len() == 3)
-        .context("Expected three curves")?;
-    let mut result = Params {
-        matrix: q13(&effect["matrix"])?,
-        curves: [[0.0; 256]; 3],
-        post: fit::IDENTITY,
-    };
-    for (slot, curve) in result.curves.iter_mut().zip(curves) {
-        *slot = coefficients::<256>(curve, "curve")?.map(|v| v as f64);
-    }
-    if let Some(post) = effect.get("post_matrix") {
-        result.post = q13(post)?;
-    }
-    Ok(result)
-}
-
-/// The base-gamma index whose output is `code` (0..16384), clipped to the table domain.
-fn inverse_base_gamma(base: &[u16; 256], code: f64) -> f64 {
-    let base = base.map(f64::from);
-    if code <= base[0] {
-        return 0.0;
-    }
-    let Some(upper) = (1..256).find(|&i| base[i] >= code) else {
-        return 255.0;
-    };
-    let (low, high) = (base[upper - 1], base[upper]);
-    upper as f64 - 1.0 + (code - low) / (high - low)
-}
-
-/// Inverts the Standard rendering, so `Model::render` with Standard returns the input again.
-struct Standard {
-    base: [u16; 256],
-    inverse: Matrix,
-}
-
-impl Standard {
-    fn new(base: &[u16; 256]) -> Self {
-        let look = unit(&fit::STANDARD_LOOK);
-        let rows: Matrix = std::array::from_fn(|r| std::array::from_fn(|c| look[r * 3 + c]));
-        Self {
-            base: *base,
-            inverse: cube::inverse(&rows).expect("the Standard look matrix is invertible"),
-        }
-    }
-
-    /// Scene-linear light that Standard renders as the sRGB-encoded `display`.
-    fn linear(&self, display: [f64; 3]) -> [f64; 3] {
-        let mixed = display.map(|v| inverse_base_gamma(&self.base, v * 16384.0) / fit::K);
-        cube::mul(&self.inverse, mixed)
+pub fn params(effect: &Effect) -> Params {
+    Params {
+        matrix: unit(&effect.matrix),
+        curves: effect.curves.map(|curve| curve.map(f64::from)),
+        post: effect.post_matrix.as_ref().map_or(fit::IDENTITY, unit),
+        sectors: effect.hue_sectors.as_ref().map(hue::HueSectors::stage),
     }
 }
 
 /// A legacy Standard-JPEG input table, red fastest, then green, then blue.
 /// Published catalogs use `linear_preview_lut` instead.
-pub fn preview_lut(base_gamma: &[u16; 256], effect: &Value) -> Result<Vec<u8>> {
-    let params = params(effect)?;
-    let selective = effect
-        .get("selective_color")
-        .map(|value| Selective::from_json(value).map(|s| s.table()))
-        .transpose()?;
+pub fn preview_lut(base_gamma: &[u16; 256], effect: &Effect) -> Result<Vec<u8>> {
+    let params = params(effect);
+    let selective = effect.selective.as_ref().map(Selective::table);
     let model = Model::new(base_gamma);
-    let standard = Standard::new(base_gamma);
     let step = |i: usize| i as f64 / (LUT_SIZE - 1) as f64;
     let mut table = Vec::with_capacity(LUT_SIZE.pow(3) * 3);
     for b in 0..LUT_SIZE {
         for g in 0..LUT_SIZE {
             for r in 0..LUT_SIZE {
-                let linear = standard.linear([step(r), step(g), step(b)]);
+                // Scene-linear light that Standard renders as this display color.
+                let linear = model.decode(Encoding::Standard, [step(r), step(g), step(b)]);
                 let mut display = model.render(&params, linear);
                 if let Some(table) = &selective {
                     display = selective::apply_rgb(table, display);
@@ -141,12 +108,9 @@ fn linear_lut(render: impl Fn([f64; 3]) -> [f64; 3]) -> Vec<u8> {
 
 /// Renders RAW linear sRGB, using sRGB-encoded lookup coordinates in red-fastest order.
 /// The output contains `LUT_SIZE` cubed 8-bit RGB samples.
-pub fn linear_preview_lut(base_gamma: &[u16; 256], effect: &Value) -> Result<Vec<u8>> {
-    let params = params(effect)?;
-    let selective = effect
-        .get("selective_color")
-        .map(|value| Selective::from_json(value).map(|s| s.table()))
-        .transpose()?;
+pub fn linear_preview_lut(base_gamma: &[u16; 256], effect: &Effect) -> Result<Vec<u8>> {
+    let params = params(effect);
+    let selective = effect.selective.as_ref().map(Selective::table);
     let model = Model::new(base_gamma);
     Ok(linear_lut(|linear| {
         let display = model.render(&params, linear);
@@ -161,9 +125,7 @@ pub fn linear_preview_lut(base_gamma: &[u16; 256], effect: &Value) -> Result<Vec
 /// Standard applies its look matrix and base gamma directly, without effect curves.
 pub fn standard_linear_preview_lut(base_gamma: &[u16; 256]) -> Vec<u8> {
     let model = Model::new(base_gamma);
-    let look = unit(&fit::STANDARD_LOOK);
-    let matrix: Matrix = std::array::from_fn(|r| std::array::from_fn(|c| look[r * 3 + c]));
-    linear_lut(|linear| cube::mul(&matrix, linear).map(|value| model.base_gamma(value) / 16384.0))
+    linear_lut(|linear| model.standard(linear))
 }
 
 /// Standard base64 with padding. The catalog carries each 40 x 40 RGBA icon
@@ -192,9 +154,25 @@ fn text<'a>(value: &'a Value, what: &str) -> Result<&'a str> {
         .with_context(|| format!("Expected effect {what}"))
 }
 
+/// Checks a Standard base gamma table from a site catalog: 256 values from 0 that do
+/// not decrease and end near 16384, as `grkit_build::firmware::standard_base_gamma` reads them.
+pub fn base_gamma(values: &[u16]) -> Result<[u16; 256]> {
+    let table: [u16; 256] = values
+        .try_into()
+        .context("Expected 256 base gamma values")?;
+    ensure!(
+        table[0] == 0
+            && table.windows(2).all(|pair| pair[0] <= pair[1])
+            && (16000..=16384).contains(&table[255]),
+        "Unexpected Standard base gamma"
+    );
+    Ok(table)
+}
+
 /// Compiles effect definitions for the site catalog of `target`, whose firmware holds
 /// `base_gamma`. The result holds `catalog.json`, one `.GRF` per effect under its
 /// package filename, `preview/<id>.lut`, and the Standard baseline preview table.
+/// The catalog also gives `base_gamma`, so the site can import LUTs without the firmware.
 pub fn publish_effects(
     definitions: &[Value],
     base_gamma: &[u16; 256],
@@ -214,7 +192,7 @@ pub fn publish_effects(
     for definition in definitions {
         let blob = effects::compile_definition(definition)?;
         let (effect, icon) = effects::decode(&blob)?;
-        let id = text(&effect["effect_id"], "ID")?;
+        let id = effect.id.as_str();
         let file = effects::filename(id)?;
         ensure!(
             ids.insert(id.to_owned()) && !files.contains_key(&file),
@@ -226,24 +204,33 @@ pub fn publish_effects(
             !files.contains_key(&preview),
             "Effect preview conflicts with the Standard baseline: {id}"
         );
-        entries.push(json!({
+        let mut entry = json!({
             "id": id,
-            "name": effect["name"],
+            "name": effect.name,
             "icon": base64(&icon),
-            "monochrome": effect["flags"].as_u64() == Some(effects::MONOCHROME.into()),
+            "monochrome": effect.monochrome(),
             "look": text(&attribution["target"], "target look")?,
             "origin": text(&attribution["origin"], "origin")?,
             "license": text(&attribution["license"], "license")?,
             "file": file,
             "sha256": packaging::sha256(&blob),
             "preview": preview,
-        }));
+        });
+        // The site draws a film cover icon from its fields with web fonts, so it
+        // stays sharp at any size. The pixels remain the camera's icon.
+        if definition["icon"].get("template").is_some() {
+            entry["cover"] = definition["icon"].clone();
+        }
+        entries.push(entry);
         files.insert(preview, linear_preview_lut(base_gamma, &effect)?);
         files.insert(file, blob);
     }
     let catalog = json!({
         "schema": CATALOG_SCHEMA,
         "target": target,
+        // The site fits imported LUTs over this table, as `grkit effects import` does with
+        // the table that it reads from the firmware. See `base_gamma`.
+        "base_gamma": base_gamma.as_slice(),
         "preview": {
             "size": LUT_SIZE,
             "order": "rgb",

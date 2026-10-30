@@ -1,14 +1,18 @@
 #ifndef GRKIT_ABOUT_H
 #define GRKIT_ABOUT_H
-/* About: the last root row, after the plugin rows. It is part of the core, not
-   a plugin, so it always shows and PLUGINS.TXT does not select it. Its summary
-   gives the GRKit version. It has no rows, so OK on it opens no page. */
-#include "plugin.h"
+/* About: the last root row, after the module pages. It is part of the core,
+   so it always shows. Its summary gives the GRKit version. It has no rows, so
+   OK on it opens no page. */
+#include "core.h"
 
-static const u16 *about_text(volatile u32 *h) { (void)h;static const u16 empty[]={'N','o',' ','c','o','n','t','r','o','l','s',0};return empty; }
+/* The About tile reads VER, so the GRKit root shows one GRK tile. It follows
+   the GRKit tile in chunk 0. */
+#define GRKIT_ICON_VERSION 0x7ffdU
+
+static const u16 *about_text(volatile u32 *h) { return text(h,TEXT_VERSION); }
 static const u16 *about_label(volatile u32 *h,u32 row) { (void)row; return about_text(h); }
 static u32 about_none(volatile u32 *h) { (void)h; return 0; }
-static u32 about_icon(volatile u32 *h,u32 row) { (void)h; (void)row; return GRKIT_ICON_GRKIT; }
+static u32 about_icon(volatile u32 *h,u32 row) { (void)h; (void)row; return GRKIT_ICON_VERSION; }
 static u32 about_checked(volatile u32 *h,u32 row) { (void)h; (void)row; return 0; }
 static void about_apply(volatile u32 *h,u32 row) { (void)h; (void)row; }
 

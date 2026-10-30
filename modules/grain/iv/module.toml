@@ -1,0 +1,11 @@
+id = "GRAIN"
+version = 1
+order = 50
+sources = []
+tiles = ["tiles/soft-0.png", "tiles/soft-1.png", "tiles/soft-2.png", "tiles/soft-3.png", "tiles/soft-4.png"]
+uses = ["CORE.GRAIN", "CORE.GRAIN_SIZE"]
+
+[page]
+setting = "CORE.GRAIN"
+off_row = true
+settings = ["CORE.GRAIN", "CORE.GRAIN_SIZE"]

@@ -1,6 +1,15 @@
 #include "firmware.h"
 #include "abi.h"
 #include "hooks.h"
+/* framing.c syncs the capture aspect with FRAMING_CAPTURE_ASPECT and keeps the
+   live view in 3:2 with FW_CAPTURE_ASPECT_GET (target headers). The hooks
+   that complete each come from the site tables of the target (hooks.h). */
+#if defined(FRAMING_CAPTURE_ASPECT) != defined(HOOK_FRAMING_CAPTURE_REQUEST_HOOK)
+#error "FRAMING_CAPTURE_ASPECT and the framing_capture_request_hook hook go together"
+#endif
+#if defined(FW_CAPTURE_ASPECT_GET) != defined(HOOK_FRAMING_LIVE_MODE)
+#error "FW_CAPTURE_ASPECT_GET and the framing_live_* hooks go together"
+#endif
 .syntax unified
 .arm
 .text
@@ -53,84 +62,52 @@ framing_children:
     pop {r0-r3,r12,lr}
     ldr pc,=HOOK_FRAMING_CHILDREN_TARGET
 #ifdef HOOK_FRAMING_CLASSIFY
-/* 65:24 shares capture aspect id 2 with 16:9. These hooks switch the id 2
-   geometry: shooting follows the Framing ratio, playback follows the size of
-   the photo that the classifier saw last. A target header can replace the
-   GR III 2.10 sizes and classifier registers below. */
-#ifndef XPAN_HEIGHT_0
-/* GetResolution id 2: the stock 16:9 height and the 65:24 height of each size. */
-#define XPAN_HEIGHT_0 3376, 2216
-#define XPAN_HEIGHT_1 2704, 1776
-#define XPAN_HEIGHT_2 1888, 1240
-#define XPAN_HEIGHT_3 1080, 712
-/* The 65:24 sizes (width, height), largest first. */
-#define XPAN_SIZES 6000, 2216, 4800, 1776, 3360, 1240, 1920, 712
+/* XPan (65:24) and 2.35:1 share capture aspect id 2 with 16:9. These hooks
+   switch the id 2 geometry: shooting follows the Framing ratio, playback
+   follows the size of the photo that the classifier saw last. The family
+   header gives the sizes (XPAN_HEIGHT_<n>: the stock 16:9, the 65:24, and the
+   2.35:1 height of GetResolution id 2; XPAN_SIZES and SCOPE_SIZES: the 65:24
+   and the 2.35:1 sizes, largest first) and the classifier registers at the
+   aspect BL (the width, the class pointer, and the return of its frame). */
+#if !defined(XPAN_HEIGHT_0) || !defined(XPAN_HEIGHT_1) || !defined(XPAN_HEIGHT_2) || \
+    !defined(XPAN_HEIGHT_3) || !defined(XPAN_SIZES) || !defined(SCOPE_SIZES)
+#error "The family header defines the XPan and 2.35:1 sizes"
 #endif
-#ifndef CLASSIFY_WIDTH
-/* Size classifier registers at the aspect BL: the width, the class pointer,
-   and the return of the classifier's frame. */
-#define CLASSIFY_WIDTH r7
-#define CLASSIFY_CLASS r6
-#define CLASSIFY_RETURN ldm sp, {r4,r5,r6,r7,fp,sp,pc}
+#if !defined(CLASSIFY_WIDTH) || !defined(CLASSIFY_CLASS) || !defined(CLASSIFY_RETURN)
+#error "The family header defines the classifier registers"
 #endif
-/* r12 = 1 when id 2 means 65:24. Clobbers only r12 and the flags. */
-xpan_active:
+/* The id 2 geometry in r12: 0 = 16:9, 1 = XPan, 2 = 2.35:1. GRKIT_HOST_FRAME_FILE
+   is 0 while shooting, else 1 + the geometry of the photo that the classifier
+   saw last. Shooting follows GRKIT_HOST_FRAME_CROP, the crop that applies in
+   the native aspect (runtime/framing.c). Clobbers only r12 and the flags. */
+wide_mode:
     ldr r12, =GRKIT_HEADER_REFERENCE
     ldrb r12, [r12, #GRKIT_HOST_FRAME_FILE]
     cmp r12, #0
     beq 1f
-    cmp r12, #2
-    moveq r12, #1
-    movne r12, #0
+    sub r12, r12, #1
     bx lr
 1:  ldr r12, =GRKIT_HEADER_REFERENCE
-    ldr r12, [r12, #GRKIT_HOST_FRAME_RATIO]
+    ldr r12, [r12, #GRKIT_HOST_FRAME_CROP]
     cmp r12, #1
-    moveq r12, #1
+    bxeq lr
+    cmp r12, #4
+    moveq r12, #2
     movne r12, #0
     bx lr
 /* GetResolution id 2 heights replace `mov r3, #height` before a store and an
    unconditional branch to the epilogue, so r12 and the flags are dead. */
-#ifdef GRKIT_TARGET_GR3_210
-.macro HEIGHT name, stock, index
-.global \name
-\name:
-    push {r0-r2,r4,r12,lr}
-    mov r0, #\index
-    bl framing_geometry
-    movw r3, #\stock
-    cmp r0, #0
-    uxthne r2, r0
-    strne r2, [sp,#8]
-    lsrne r3, r0, #16
-    pop {r0-r2,r4,r12,pc}
-.endm
-HEIGHT framing_height_0, 3376, 0
-HEIGHT framing_height_1, 2704, 1
-HEIGHT framing_height_2, 1888, 2
-HEIGHT framing_height_3, 1080, 3
-.macro INSET name, thumbnail
-.global \name
-\name:
-    push {r2-r4,lr}
-    mov r0, #\thumbnail
-    bl framing_insets
-    lsr r1, r0, #16
-    uxth r0, r0
-    pop {r2-r4,pc}
-.endm
-INSET framing_screennail_inset, 0
-INSET framing_thumbnail_inset, 1
-#else
-.macro HEIGHT name, stock, xpan
+.macro HEIGHT name, stock, xpan, scope
 .global \name
 \name:
     push {lr}
-    bl xpan_active
+    bl wide_mode
     pop {lr}
     movw r3, #\stock
-    cmp r12, #0
-    movwne r3, #\xpan
+    cmp r12, #1
+    movweq r3, #\xpan
+    cmp r12, #2
+    movweq r3, #\scope
     bx lr
 .endm
 HEIGHT framing_height_0, XPAN_HEIGHT_0
@@ -138,35 +115,154 @@ HEIGHT framing_height_1, XPAN_HEIGHT_1
 HEIGHT framing_height_2, XPAN_HEIGHT_2
 HEIGHT framing_height_3, XPAN_HEIGHT_3
 /* Top insets of the 720x480 screennail and 160x120 thumbnail. */
-.macro INSET name, stock, xpan
+.macro INSET name, stock, xpan, scope
 .global \name
 \name:
     push {lr}
-    bl xpan_active
+    bl wide_mode
     pop {lr}
     mov r1, #\stock
-    cmp r12, #0
-    movne r1, #\xpan
+    cmp r12, #1
+    moveq r1, #\xpan
+    cmp r12, #2
+    moveq r1, #\scope
     bx lr
 .endm
-INSET framing_screennail_inset, 38, 107
-INSET framing_thumbnail_inset, 16, 30
+INSET framing_screennail_inset, 38, 107, 87
+INSET framing_thumbnail_inset, 16, 30, 26
+#ifdef HOOK_FRAMING_WIDTH_0
+/* 5:4, 1:1, and 7:6 narrow capture aspect id 1 (4:3). These hooks switch
+   the id 1 geometry like the id 2 hooks above. The family header gives the
+   widths (NARROW_WIDTH_<n>: the stock 4:3, the 5:4, the 1:1, and the 7:6
+   width of GetResolution id 1), the XS height (NARROW_HEIGHT_3: the stock
+   4:3 and the 1:1 height), and the 5:4 and 7:6 sizes. Each 1:1 size is a native 1:1 size, so a
+   1:1 photo plays back as a native one and needs no playback geometry. */
+#if !defined(NARROW_WIDTH_0) || !defined(NARROW_WIDTH_1) || !defined(NARROW_WIDTH_2) || \
+    !defined(NARROW_WIDTH_3) || !defined(NARROW_HEIGHT_3) || !defined(NARROW_SIZES)
+#error "The family header defines the 5:4, 1:1, and 7:6 sizes"
 #endif
-/* r0 = width, r1 = height. r12 = 65:24 size class 0..3, or -1.
+/* The id 1 geometry in r12: 0 = 4:3, 1 = 5:4, 2 = 1:1, 3 = 7:6. Shooting
+   follows GRKIT_HOST_FRAME_CROP (value 6 for 5:4, 5 for 1:1, 7 for 7:6), so
+   the native 4:3 keeps its sizes,
+   playback the photo that the classifier saw last (GRKIT_HOST_FRAME_FILE 4
+   for 5:4, 5 for 7:6). Clobbers only r12 and the flags. */
+narrow_mode:
+    ldr r12, =GRKIT_HEADER_REFERENCE
+    ldrb r12, [r12, #GRKIT_HOST_FRAME_FILE]
+    cmp r12, #0
+    beq 1f
+    cmp r12, #4
+    moveq r12, #1
+    bxeq lr
+    cmp r12, #6
+    moveq r12, #4
+    bxeq lr
+    cmp r12, #5
+    moveq r12, #3
+    movne r12, #0
+    bx lr
+1:  ldr r12, =GRKIT_HEADER_REFERENCE
+    ldr r12, [r12, #GRKIT_HOST_FRAME_CROP]
+    cmp r12, #6
+    moveq r12, #1
+    bxeq lr
+    cmp r12, #8
+    moveq r12, #4
+    bxeq lr
+    cmp r12, #7
+    moveq r12, #3
+    bxeq lr
+    cmp r12, #5
+    moveq r12, #2
+    movne r12, #0
+    bx lr
+/* GetResolution id 1 widths replace `mov r2, #width` before the height, two
+   stores, and a branch to the epilogue, so r12 and the flags are dead. */
+.macro WIDTH name, stock, five, square, seven, fp100c
+.global \name
+\name:
+    push {lr}
+    bl narrow_mode
+    pop {lr}
+    movw r2, #\stock
+    cmp r12, #1
+    movweq r2, #\five
+    cmp r12, #2
+    movweq r2, #\square
+    cmp r12, #3
+    movweq r2, #\seven
+    cmp r12, #4
+    movweq r2, #\fp100c
+    bx lr
+.endm
+WIDTH framing_width_0, NARROW_WIDTH_0
+WIDTH framing_width_1, NARROW_WIDTH_1
+WIDTH framing_width_2, NARROW_WIDTH_2
+WIDTH framing_width_3, NARROW_WIDTH_3
+/* The id 1 XS height replaces `mov r3, #height` after the XS width. The
+   native 1:1 XS is smaller than the 4:3 XS height. */
+.macro HEIGHT_XS name, stock, square
+.global \name
+\name:
+    push {lr}
+    bl narrow_mode
+    pop {lr}
+    movw r3, #\stock
+    cmp r12, #2
+    movweq r3, #\square
+    bx lr
+.endm
+HEIGHT_XS framing_narrow_height_3, NARROW_HEIGHT_3
+/* The id 1 left inset of the 720x480 screennail replaces `mov r0, #40`. */
+.global framing_narrow_screennail
+framing_narrow_screennail:
+    push {lr}
+    bl narrow_mode
+    pop {lr}
+    mov r0, #40
+    cmp r12, #1
+    moveq r0, #60
+    cmp r12, #2
+    moveq r0, #120
+    cmp r12, #3
+    moveq r0, #80
+    cmp r12, #4
+    moveq r0, #48
+    bx lr
+/* The id 1 thumbnail inset: the stock code stores 0 (r1) at the left inset
+   [r2], then at the top inset [r3]. This replaces the second store and
+   writes the left inset of the 160x120 thumbnail again. The IIP stores a
+   picture with chroma pairs only from an even column, so 5:4 takes 6
+   (148 x 120) instead of 5. 1:1 takes 20 (120 x 120), and 7:6 takes 10
+   (140 x 120). */
+.global framing_narrow_thumbnail
+framing_narrow_thumbnail:
+    push {r0,lr}
+    bl narrow_mode
+    mov r0, #0
+    cmp r12, #1
+    moveq r0, #6
+    cmp r12, #2
+    moveq r0, #20
+    cmp r12, #3
+    moveq r0, #10
+    cmp r12, #4
+    moveq r0, #2
+    strh r0, [r2]
+    strh r1, [r3]
+    pop {r0,pc}
+#endif
+/* r0 = width, r1 = height. r12 = the index in wide_sizes: 0..3 for the 65:24
+   size classes, 4..7 for the 2.35:1 size classes, 8..11 for the 5:4 size
+   classes, 12..15 for the 7:6 size classes, or -1.
    Clobbers r0-r3, r12 and the flags. */
-xpan_size:
-#ifdef GRKIT_TARGET_GR3_210
-    push {r0-r5,lr}
-    bl framing_classify_size
-    mov r12, r0
-    pop {r0-r5,pc}
-#else
+wide_size:
     cmp r0, r1
     movhs r2, r0
     movhs r3, r1
     movlo r2, r1
     movlo r3, r0
-    adr r12, xpan_sizes
+    adr r12, wide_sizes
     push {r4}
     mov r4, #0
 2:  ldrh r0, [r12], #2
@@ -182,29 +278,29 @@ xpan_size:
 4:  mov r12, r4
     pop {r4}
     bx lr
+wide_sizes:
+    .hword XPAN_SIZES, SCOPE_SIZES
+#ifdef NARROW_SIZES
+    .hword NARROW_SIZES, FP100C_SIZES
 #endif
-xpan_sizes:
-    .hword XPAN_SIZES, 0, 0
+    .hword 0, 0
 /* Replaces the aspect BL in the size classifier (GR III 0x532b3988: frame
    {r4-r7,fp,ip,lr,pc}, r7 = width, r4 = height, r6 = class pointer).
-   A 65:24 size returns class and success from the classifier. Other sizes
-   record "not 65:24" and continue with the native aspect function. */
+   A 65:24, 2.35:1, 5:4, or 7:6 size records its geometry
+   (GRKIT_HOST_FRAME_FILE 2, 3, 4, or 5), then returns its size class and success from the classifier.
+   Other sizes record 1 and continue with the native aspect function. */
 .global framing_classify
 framing_classify:
     push {r0-r3,lr}
-    bl xpan_size
+    bl wide_size
     pop {r0-r3,lr}
     ldr r2, =GRKIT_HEADER_REFERENCE
     cmp r12, #0
     blt 5f
-#ifdef GRKIT_TARGET_GR3_210
-    lsr r3, r12, #8
-    add r3, r3, #1
-    and r12, r12, #255
-#else
-    mov r3, #2
-#endif
+    mov r3, r12, lsr #2
+    add r3, r3, #2
     strb r3, [r2, #GRKIT_HOST_FRAME_FILE]
+    and r12, r12, #3
     cmp CLASSIFY_CLASS, #0
     strbne r12, [CLASSIFY_CLASS]
     mov r0, #1
@@ -215,15 +311,53 @@ framing_classify:
     mov r1, r4
     ldr pc, =HOOK_FRAMING_CLASSIFY_TARGET
 /* Replaces the tail branch of the image aspect getter (GR III 0x532b3ca0,
-   r0 = width, r1 = height): 65:24 sizes report aspect id 2. */
+   r0 = width, r1 = height): 65:24 and 2.35:1 sizes report aspect id 2, and
+   5:4 and 7:6 sizes aspect id 1. */
 .global framing_image_aspect
 framing_image_aspect:
     push {r0-r3,lr}
-    bl xpan_size
+    bl wide_size
     pop {r0-r3,lr}
     cmp r12, #0
-    movge r0, #2
-    bxge lr
-    ldr pc, =HOOK_FRAMING_IMAGE_ASPECT_TARGET
+    blt 6f
+    cmp r12, #8
+    movlo r0, #2
+    movhs r0, #1
+    bx lr
+6:  ldr pc, =HOOK_FRAMING_IMAGE_ASPECT_TARGET
+#endif
+#ifdef HOOK_FRAMING_LEVEL_THRESHOLD
+/* ScreenDevice::OnSetLevelAlarm (runtime/framing.c: highlight warning).
+   This replaces `mov r5, #0xfe00`: r5 gets the threshold of the effect. The
+   next call reads r0 to r2. */
+.global framing_level_threshold
+framing_level_threshold:
+    push {r0-r3,r12,lr}
+    bl framing_level_value
+    mov r5, r0
+    pop {r0-r3,r12,pc}
+/* This replaces `mov r1, r6` before the tail call. r4 is the screen and r6
+   the mode, 0 for off. */
+.global framing_level_mode
+framing_level_mode:
+    push {r0-r3,r12,lr}
+    mov r0, r4
+    mov r1, r6
+    bl framing_level_record
+    pop {r0-r3,r12,lr}
+    mov r1, r6
+    bx lr
+#endif
+#ifdef HOOK_FRAMING_HISTOGRAM
+/* LiveViewController's live-view histogram update (runtime/level.h). This
+   replaces the BL to the copy of the 256 luma bins into the controller's 128
+   bins at r2. The caller then marks the bins as new. */
+.global framing_histogram
+framing_histogram:
+    push {r2,lr}
+    ldr r12, =HOOK_FRAMING_HISTOGRAM_TARGET
+    blx r12
+    pop {r0,lr}
+    b framing_histogram_remap
 #endif
 .ltorg

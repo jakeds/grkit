@@ -1,0 +1,13 @@
+title = "Date"
+rows = ["Off", "YY MM DD", "YY MM DD + time", "MM DD YY", "DD MM YY", "DD MM YY + time", "YYYY.MM.DD"]
+
+[settings.STYLE]
+label = "Format"
+
+[settings.LOOK]
+label = "Appearance"
+values = ["Classic", "GR1s", "GR II", "Small mono white", "Small mono black"]
+
+[settings.POSITION]
+label = "Position"
+values = ["Film", "Upright"]

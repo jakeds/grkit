@@ -2,58 +2,38 @@ import { describe, expect, it } from 'vitest';
 import { ALL_MODULES, planModules, type ModuleKey } from './modules';
 
 describe('planModules', () => {
-  it('omits nothing by default', () => {
+  it('adds every module by default', () => {
     expect(planModules(ALL_MODULES, 2)).toEqual({
       includeEffects: true,
-      omitted: [],
-      visible: ['imageControl', 'framing', 'guides', 'dateStamp', 'grain', 'bloom', 'halation', 'blackFloor', 'splitToning', 'colourRange', 'colourSaturation', 'colourHue', 'colourBrightness', 'highlightRolloff', 'softShortcut'],
+      modules: ['FILMLOOK', 'FRAMING', 'GUIDES', 'DATE', 'GRAIN', 'SOFTTONE', 'SOFTLITE', 'SOFTSPLT', 'SOFTCOL'],
+      visible: ['filmLook', 'framing', 'guides', 'dateStamp', 'grain', 'softTone', 'softLight', 'softSplit', 'softColour'],
     });
   });
 
-  it('turns Image Control off by omitting it and leaving the effects out', () => {
+  it('turns Image Control off by leaving out its module and the effects', () => {
     const enabled = new Set<ModuleKey>(['framing', 'dateStamp']);
     expect(planModules(enabled, 2)).toEqual({
       includeEffects: false,
-      omitted: ['image-control', 'guides', 'grain', 'bloom', 'halation', 'black-floor', 'split-toning', 'colour-range', 'colour-saturation', 'colour-hue', 'colour-brightness', 'highlight-rolloff', 'soft-shortcut'],
+      modules: ['FRAMING', 'DATE'],
       visible: ['framing', 'dateStamp'],
     });
   });
 
-  it('shows Image Control only with effects', () => {
-    expect(planModules(new Set<ModuleKey>(['imageControl']), 0).visible).toEqual([]);
-    expect(planModules(new Set<ModuleKey>(['imageControl']), 1).visible).toEqual(['imageControl']);
-  });
-
-  it('omits every other plugin when only Image Control is on', () => {
-    expect(planModules(new Set<ModuleKey>(['imageControl']), 1).omitted).toEqual([
-      'framing',
-      'guides',
-      'date-stamp',
-      'grain',
-      'bloom',
-      'halation',
-      'black-floor',
-      'split-toning',
-      'colour-range',
-      'colour-saturation',
-      'colour-hue',
-      'colour-brightness',
-      'highlight-rolloff',
-      'soft-shortcut',
-    ]);
-  });
-
-  it('plans only the plugins that the camera has', () => {
-    const partial: ModuleKey[] = ['guides', 'dateStamp'];
-    expect(planModules(ALL_MODULES, 2, partial)).toEqual({
-      includeEffects: false,
-      omitted: [],
-      visible: ['guides', 'dateStamp'],
+  it('adds Image Control only with effects', () => {
+    expect(planModules(new Set<ModuleKey>(['filmLook']), 0)).toEqual({
+      includeEffects: true,
+      modules: [],
+      visible: [],
     });
-    expect(planModules(new Set<ModuleKey>(['imageControl', 'framing', 'guides']), 2, partial)).toEqual({
+    expect(planModules(new Set<ModuleKey>(['filmLook']), 1).modules).toEqual(['FILMLOOK']);
+  });
+
+  it('plans only the modules that the site offers for the camera', () => {
+    const offered: ModuleKey[] = ['framing', 'guides', 'dateStamp', 'grain'];
+    expect(planModules(ALL_MODULES, 2, offered)).toEqual({
       includeEffects: false,
-      omitted: ['date-stamp'],
-      visible: ['guides'],
+      modules: ['FRAMING', 'GUIDES', 'DATE', 'GRAIN'],
+      visible: ['framing', 'guides', 'dateStamp', 'grain'],
     });
   });
 });

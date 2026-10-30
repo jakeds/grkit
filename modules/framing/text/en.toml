@@ -1,0 +1,16 @@
+title = "Framing"
+rows = ["Native 3:2", "XPan", "16:9", "4:3", "2.35:1", "1:1", "5:4", "6x7 (7:6)", "FP100C"]
+# The value in the root row, which has less room than a row.
+
+summaries = ["Off", "XPan", "16:9", "4:3", "2.35:1", "1:1", "5:4", "7:6", "FP100C"]
+
+[settings."CORE.ASPECT"]
+label = "Aspect Ratio"
+
+[settings.MASK]
+label = "Mask"
+values = ["Black", "Dim", "Frame Lines"]
+
+[settings.LABEL]
+label = "Ratio Label"
+values = ["Off", "On"]

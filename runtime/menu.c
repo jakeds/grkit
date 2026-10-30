@@ -1,15 +1,10 @@
-/* The target header comes first: it can set ABI values such as the icon slot. */
+/* The target header, then the shared layout. */
 #include "firmware.h"
 #include "abi.h"
 /* Private ADJ menu. All state belongs to the module host. */
 typedef unsigned int u32;
 typedef unsigned short u16;
 typedef unsigned char u8;
-#ifdef __arm__
-/* Freestanding Thumb size builds may lower constant division to EABI calls. */
-u32 __aeabi_uidiv(u32 n,u32 d) {u32 q=0,r=0;if(!d) return 0;for(u32 i=32;i;--i) {r=(r<<1)|(n>>(i-1)&1);if(r>=d) {r-=d;q|=1U<<(i-1);}}return q;}
-int __aeabi_idiv(int n,int d) {u32 a=n<0 ? 0U-(u32)n : (u32)n,b=d<0 ? 0U-(u32)d : (u32)d;u32 q=__aeabi_uidiv(a,b);return (n<0)!=(d<0) ? -(int)q : (int)q;}
-#endif
 extern volatile u32 *menu_header(void);
 extern u32 menu_event_original(u32, const u16 *);
 extern void menu_exit_original(u32);
@@ -22,21 +17,46 @@ extern u32 menu_destroy_original(u32);
 #define CALL4(a) ((u32 (*)(u32,u32,u32,u32))(a))
 #define CALL5(a) ((u32 (*)(u32,u32,u32,u32,u32))(a))
 #define CALL3(a) ((u32 (*)(u32,u32,u32))(a))
+/* A firmware call on a view or a controller of a MENU page: a settings page,
+   an options page, the GRKit section, or About GRKit. A host test defines
+   them to record the calls. */
+#ifndef MENU_VIEW1
+#define MENU_VIEW1(fn,a) CALL1(fn)(a)
+#define MENU_VIEW2(fn,a,b) CALL2(fn)(a,b)
+#define MENU_VIEW3(fn,a,b,c) CALL3(fn)(a,b,c)
+#define MENU_VIEW4(fn,a,b,c,d) CALL4(fn)(a,b,c,d)
+#endif
+/* A word of a firmware object that a MENU page reads: a row, a controller,
+   or the stock submenu entry. A host test maps the objects. */
+#ifndef MENU_OBJECT_WORD
+#define MENU_OBJECT_WORD(a,o) WORD(a,o)
+#define MENU_OBJECT_BYTE(a,o) BYTE(a,o)
+#endif
+/* Memory access. A host test maps it to its own buffers. */
+#ifndef WORD
 #define WORD(a,o) (*(u32 *)((a)+(o)))
+#endif
+#ifndef BYTE
 #define BYTE(a,o) (*(u8 *)((a)+(o)))
-/* The plugin interface, before the services that it declares. */
-#include "plugin.h"
+#endif
+/* The shared types of the core, before the services that it declares. */
+#include "core.h"
+#include "profile.h"
 #define PAGE 6U
-/* GRKIT_HOST_RETURN: the native parameter page is opening (1) or open (2).
-   ADJ exited while GRKit was open (3), so the next ADJ opens GRKit. MENU or
-   OK on GRKit passes the event that closes ADJ to the native list (4); the
-   exit then sets 3. Only an exit sets 3, because leaving GRKit refreshes ADJ. */
+/* GRKIT_HOST_RETURN: a native page (the parameter page or a settings page)
+   is opening (1) or open (2). ADJ exited while GRKit was open (3), so the next
+   ADJ opens GRKit. MENU or OK on GRKit passes the event that closes ADJ to the
+   native list (4); the exit then sets 3. Only an exit sets 3, because leaving
+   GRKit refreshes ADJ. RETURN_ROOT marks a page that opened from the root, so
+   the page returns to the root instead of the page of the module. */
 #define RETURN_OPENING 1U
 #define RETURN_PARAMETERS 2U
 #define RETURN_GRKIT 3U
 #define RETURN_CLOSING 4U
 #define RETURN_ROOT 0x10U
 #define RETURN_STATE(value) ((value)&~RETURN_ROOT)
+/* The controller of ADJ, where a native page that GRKit opened returns. */
+#define ADJ_CONTROLLER 0x2000000U
 /* The return state after an ADJ exit. `in_grkit` is set for an exit while
    GRKit was open. */
 static u32 exit_return(u32 value,u32 in_grkit) {
@@ -50,52 +70,27 @@ static u32 exit_return(u32 value,u32 in_grkit) {
 #else
 #define A32_ENTRY
 #endif
-#ifdef FW_SOFT_OPEN_ADJ
-#include "shortcut.h"
-extern u32 menu_live_event_original(u32,const u16 *);
-extern u32 menu_live_start_original(u32,u32);
-#ifndef SHORTCUT_OPEN_ADJ
-#define SHORTCUT_OPEN_ADJ() CALL0(FW_SOFT_OPEN_ADJ)()
-#endif
-/* Only LiveViewController receives this hook: playback and native MENU never
-   enter it. Do not pass its object to the ADJ renderer. */
-A32_ENTRY u32 menu_live_event(u32 controller,const u16 *event) {
-    volatile u32 *h=menu_header();
-    if(*event==EV_FN) {
-        u32 argument=WORD((u32)event,4),phase=BYTE(argument,0),repeats=WORD(argument,4);
-        if(shortcut_consume(h,*event,phase,repeats)) return 1;
-        if(shortcut_request(h,BYTE(controller,LIVEVIEW_MOVIE),*event,phase,repeats)) {
-            SHORTCUT_OPEN_ADJ(); return 1;
-        }
-    }
-    return menu_live_event_original(controller,event);
-}
-A32_ENTRY u32 menu_live_start(u32 controller,u32 identity) {
-    /* Returning to live view cancels a request whose ADJ page never appeared. */
-    menu_header()[GRKIT_HOST_SHORTCUT_STATE/4]&=SHORTCUT_HELD;
-    return menu_live_start_original(controller,identity);
-}
-#endif
-static void plugin_touch(u32 controller);
+static void grkit_touch(u32 controller);
 static void render(u32 controller);
 static void render_step(u32 controller,u32 step);
 static void enter(u32 controller,u32 edge);
-static const u16 plugins[] = {'S','o','f','t',0};
+static void ui_native_returned(volatile u32 *h);
+static const u16 grkit_title[] = {'S','o','f','t',0};
 #ifndef MENU_TEXT
 /* The menu text at a camera address. Host tests map the address. */
 #define MENU_TEXT(address) ((const u16 *)(address))
 #endif
 #ifndef MENU_LANGUAGE
-/* The camera's UI language byte (runtime/targets): 0 is English, 18
-   Traditional Chinese, 19 Simplified Chinese, and 20 Japanese. */
+/* The camera's UI language byte (runtime/targets): 0 is English, 17
+   Korean, 18 Traditional Chinese, 19 Simplified Chinese, and 20 Japanese. */
 static u32 camera_language(void) {
-#if defined(LANGUAGE_SETTINGS_SLOT)
-    u32 settings=WORD(LANGUAGE_SETTINGS_SLOT,0);
+#if defined(UI_SETTINGS_SLOT)
+    u32 settings=WORD(UI_SETTINGS_SLOT,0);
     return settings ? BYTE(settings,LANGUAGE_SETTING) : 0;
 #elif defined(LANGUAGE_SETTING_BYTE)
     return BYTE(LANGUAGE_SETTING_BYTE,0);
 #else
-    return 0;
+#error "The build header defines LANGUAGE_SETTING_BYTE, or UI_SETTINGS_SLOT and LANGUAGE_SETTING"
 #endif
 }
 /* The camera language as a menu language (runtime/abi.h), or English. */
@@ -104,6 +99,7 @@ static u32 camera_menu_language(void) {
     case 19: return 1;
     case 18: return 2;
     case 20: return 3;
+    case 17: return 4;
     default: return 0;
     }
 }
@@ -113,16 +109,26 @@ static u32 menu_language(void) {
     u32 language=MENU_LANGUAGE();
     return language<GRKIT_TEXT_LANGUAGES ? language : 0;
 }
+/* Whether the menu language puts spaces between words and uses ASCII
+   parentheses, as English and Korean do. Chinese and Japanese do not. */
+static u32 menu_spaced(void) {
+    u32 language=menu_language();
+    return language==0 || language==4;
+}
 /* The language table index that the text hooks of menu.S pass on for GRKit
-   text. It selects the font: a Chinese or Japanese font draws that text, and
-   the Latin table index 1 draws English. Chinese or Japanese text with index 1
+   text. It selects the font: a Chinese, Japanese, or Korean font draws that
+   text, and the Latin table index 1 draws English. Such text with index 1
    shows "?" glyphs. The firmware maps the UI language byte to this index:
-   Chinese keeps 18 and 19, and Japanese (byte 20) uses index 0. */
+   Korean and Chinese keep their bytes 17, 18, and 19, and Japanese (byte 20)
+   uses index 0.
+   The Korean font draws ASCII and the Hangul of KS X 1001 only
+   (Language::undrawable). */
 A32_ENTRY u32 menu_table_index(void) {
     switch (menu_language()) {
     case 1: return 19;
     case 2: return 18;
     case 3: return 0;
+    case 4: return 17;
     default: return 1;
     }
 }
@@ -162,46 +168,67 @@ static u32 back_event(volatile u32 *h,u32 kind,u32 enabled) {
 static u32 after_menu_switch(volatile u32 *h) {
     return (h[GRKIT_HOST_MENU_EVENT_RING/4+((h[GRKIT_HOST_MENU_EVENTS/4]-2)&(GRKIT_HOST_MENU_EVENT_RING_WORDS-1))]&0xffff)==EV_SWITCH;
 }
-#ifdef EV_ADJ_PRESS
 /* An ADJ press emits EV_ADJ_PRESS followed by the confirm that OK also sends. */
 static u32 after_adj_press(volatile u32 *h) {
     return (h[GRKIT_HOST_MENU_EVENT_RING/4+((h[GRKIT_HOST_MENU_EVENTS/4]-2)&(GRKIT_HOST_MENU_EVENT_RING_WORDS-1))]&0xffff)==EV_ADJ_PRESS;
 }
-#endif
 static u32 native_action_release(u32 action,u32 active) {
     return action==10 && active;
 }
+#ifndef MENU_LEVEL_ALARM
+#define MENU_LEVEL_ALARM(screen,mode) CALL2(FW_LEVEL_ALARM)(screen,mode)
+#endif
+/* The live-view highlight warning takes its threshold from the effect when
+   the camera sets the warning (runtime/level.h: framing_level_value). A
+   change of the effect sets the warning again with its last screen and mode,
+   while the warning is on. */
+static void level_reapply(volatile u32 *h) {
+    if(h[GRKIT_HOST_LEVEL_SCREEN/4] && h[GRKIT_HOST_LEVEL_MODE/4])
+        MENU_LEVEL_ALARM(h[GRKIT_HOST_LEVEL_SCREEN/4],h[GRKIT_HOST_LEVEL_MODE/4]);
+}
+#include "tone.h"
 static u32 selected_icon(volatile u32 *h) {
-    u32 i;
-    for(i=0;i<h[GRKIT_HOST_COUNT/4];++i)
-        if(h[GRKIT_HOST_ACTIVE/4]==h[GRKIT_HOST_RECORDS/4]+i*GRKIT_RECORD_SIZE)
-            return 0x8000+i;
-    return 0x7fff;
+    u32 i=record_index(h,h[GRKIT_HOST_ACTIVE/4]);
+    return i<GRKIT_TEXT_RECORDS ? 0x8000+i : 0x7fff;
 }
 /* Override only the native still-viewfinder icon result. Off retains stock UI. */
 A32_ENTRY u32 menu_viewfinder_icon_select(u32 native_icon,u32 movie) {
-    u32 icon=selected_icon(menu_header());
+    volatile u32 *h=menu_header();
+    u32 start=profile_begin(h), icon=selected_icon(h);
+    profile_end(h,start,GRKIT_PROFILE_MENU_ICON);
     return !movie && icon!=0x7fff ? icon : native_icon;
 }
 #ifndef MENU_FRAMING_REQUEST
-/* Resend the native StillAspectRatio value, as a native menu change does.
-   The Framing capture hook maps a 3:2 request to the Framing ratio. */
-#define MENU_FRAMING_REQUEST() do { u32 s=CALL0(FW_SETTINGS)(); CALL2(FW_STILL_ASPECT_SET)(s,CALL1(FW_STILL_ASPECT_GET)(s)); } while(0)
+/* The family header sends the native aspect request again after a Framing
+   change, so the capture hook maps it to the new ratio. */
+#error "The family header defines MENU_FRAMING_REQUEST"
+#endif
+#if !defined(MENU_NATIVE_ASPECT) || !defined(MENU_SET_NATIVE_ASPECT) || !defined(MENU_STOP_LIVE_VIEW)
+/* Framing sets the native aspect for a ratio that the camera has natively. */
+#error "The family header defines MENU_NATIVE_ASPECT, MENU_SET_NATIVE_ASPECT, and MENU_STOP_LIVE_VIEW"
 #endif
 #ifndef TOOLBAR_CREATED
 /* The first full ADJ draw follows the toolbar creation. */
 #define TOOLBAR_CREATED(widget,icon) ((void)0)
 #endif
-/* Plugin services (runtime/plugin.h). */
+/* Menu services (runtime/core.h). */
 /* The Image Control summary of effect n. The installer writes one for each
    record in each language (runtime/abi.h). */
 static const u16 *effect_summary(volatile u32 *h,u32 n) {
     return MENU_TEXT(GRKIT_TEXT(h)+GRKIT_TEXT_SUMMARY+
         (menu_language()*GRKIT_TEXT_RECORDS+n)*GRKIT_SUMMARY_UNITS*2);
 }
-static u32 framing_ratios(void) { return FRAMING_RATIO_COUNT; }
-static void request_native_aspect(void) { MENU_FRAMING_REQUEST(); }
+/* The capture aspect (CORE.ASPECT). A native aspect change stops the live
+   view first where the family needs that, as the native MENU does. */
+static u32 aspect_native(void) { return MENU_NATIVE_ASPECT(); }
+static void aspect_set_native(u32 id) { MENU_STOP_LIVE_VIEW(); MENU_SET_NATIVE_ASPECT(id); }
+static void aspect_request(void) { MENU_FRAMING_REQUEST(); }
+/* A new effect sets the highlight warning again. */
+static void tone_stored(volatile u32 *h) { level_reapply(h); }
 #include "modules.h"
+/* The core exports this service to modules (runtime/sdk/grkit.h). It runs
+   in the context of its caller. */
+__attribute__((used)) void grkit_export_setting_set(u32 handle,u32 value) { setting_store(menu_header(),handle,value); }
 static u32 private_mode(u32 controller) {
     volatile u32 *h=menu_header();
     return h[GRKIT_HOST_MENU_CONTROLLER/4] == controller && h[GRKIT_HOST_MENU_LEVEL/4] != 0;
@@ -214,33 +241,10 @@ static void native_focus(u32 controller) {
 /* Fn opens the native parameter page from an effect row in the still
    context. The native Fn hint shows only where this works. */
 static u32 parameters_available(u32 controller) {
-#if defined(PARAMETER_KINDS)
     /* The page edits the adjustments of the effect (menu_parameter_*), so the
        native Image Control type does not matter. */
     return parameters_row(menu_header()) && ADJ_MOVIE(controller)!=1;
-#elif defined(FW_SETTINGS_DOMAIN)
-    /* The page edits the native settings of the active type, which the
-       effects apply. */
-    u32 settings=WORD(WORD(WORD(FW_SETTINGS_DOMAIN,0),0x518),0);
-    return parameters_row(menu_header()) &&
-           ADJ_MOVIE(controller)!=1 && BYTE(settings,SETTINGS_IC_TYPE)==11;
-#else
-    /* The target has no native Standard parameter page for Fn yet. */
-    (void)controller;
-    return 0;
-#endif
 }
-#include "adj-slot.h"
-static SoftAdjSlots controller_slots(u32 controller) {
-    u32 kinds[5],i;for(i=0;i<5;++i) kinds[i]=CALL2(FW_ADJ_SLOT_TYPE)(controller,i);
-#ifdef SOFT_NATIVE_ADJ_SLOT
-    return adj_slots(kinds,ADJ_IC_SLOT_TYPE,ADJ_MOVIE(controller)==1);
-#else
-    return adj_slots(kinds,ADJ_IC_SLOT_TYPE,1);
-#endif
-}
-static u32 borrowed_slot(u32 controller) { return controller_slots(controller).soft; }
-static u32 borrowed_focus(u32 controller) { u32 slot=borrowed_slot(controller);return slot<5 && BYTE(controller,ADJ_SLOT)==slot; }
 /* Native slot indices stay in 0..4. Only the transient toolbar has six cells. */
 static u32 toolbar_x(u32 slot) { return 415 + 50 * slot; }
 static void toolbar_destroy(u32 widget) {
@@ -265,25 +269,6 @@ static void toolbar_layout(u32 controller,u32 expanded) {
 static void toolbar(u32 controller) {
     volatile u32 *h=menu_header();
     u32 widget=h[GRKIT_HOST_TOOLBAR_WIDGET/4];
-    SoftAdjSlots plan=controller_slots(controller);
-    if(plan.soft<5) {
-        u32 i;
-        if(widget && h[GRKIT_HOST_TOOLBAR_OWNER/4]==controller) toolbar_visible(widget,0);
-        for(i=0;i<5;++i) {
-            u32 visible=plan.mask>>i&1U,x=425+60*adj_slot_rank(plan,i);
-            CALL2(FW_VIEW_SET_VISIBLE)(WORD(controller,ADJ_CELLS+i*4),visible);
-            CALL2(FW_VIEW_SET_VISIBLE)(WORD(controller,ADJ_ICONS+i*4),visible);
-            CALL2(FW_VIEW_SET_X)(WORD(controller,ADJ_CELLS+i*4),x);
-            CALL2(FW_VIEW_SET_X)(WORD(controller,ADJ_ICONS+i*4),x+5);
-        }
-        CALL2(FW_ICON_VIEW_SET_ICON)(WORD(controller,ADJ_ICONS+plan.soft*4),GRKIT_ICON_GRKIT);
-        CALL2(FW_VIEW_SET_X)(WORD(controller,ADJ_FRAME),425+60*adj_slot_rank(plan,BYTE(controller,ADJ_SLOT)));
-        CALL2(FW_VIEW_SET_VISIBLE)(WORD(controller,ADJ_FRAME),1);
-        return;
-    }
-    /* A former borrowed layout may have hidden Off cells. Restore the native
-       five-cell visibility before movie ADJ or the sixth-entry fallback. */
-    {u32 i;for(i=0;i<5;++i) {CALL2(FW_VIEW_SET_VISIBLE)(WORD(controller,ADJ_CELLS+i*4),1);CALL2(FW_VIEW_SET_VISIBLE)(WORD(controller,ADJ_ICONS+i*4),1);}}
     if(widget && h[GRKIT_HOST_TOOLBAR_OWNER/4]!=controller) return;
     if(ADJ_MOVIE(controller)==1) {
         if(widget) toolbar_visible(widget,0);
@@ -293,7 +278,7 @@ static void toolbar(u32 controller) {
     if(!widget) {
         u32 parent=WORD(WORD(controller,ADJ_ICONS),4);
         u32 position=WORD(parent,0xc), end=WORD(parent,0x10), icon, offset;
-        u32 binding[3]={(u32)plugin_touch,0,controller};
+        u32 binding[3]={(u32)grkit_touch,0,controller};
         u32 callback[4]={(u32)binding,0,FW_ADJ_TOUCH_ENTER,FW_ADJ_TOUCH_LEAVE};
         /* Draw the native background before the shared selection frame. */
         while(position!=end && WORD(position,0)!=WORD(controller,ADJ_FRAME)) position+=4;
@@ -329,29 +314,29 @@ static void toolbar(u32 controller) {
     toolbar_layout(controller,1);
     CALL2(FW_VIEW_SET_VISIBLE)(WORD(controller,ADJ_FRAME),1);
 }
-#ifdef PARAMETER_KINDS
 /* The parameter page title of a GRKit session (GRKIT_TEXT_PARAMETER_TITLE). */
 static volatile u32 *parameter_title(volatile u32 *h) {
     return (volatile u32 *)(GRKIT_TEXT(h)+GRKIT_TEXT_PARAMETER_TITLE);
 }
-#endif
 A32_ENTRY void menu_refresh(u32 controller) {
     volatile u32 *h=menu_header();
-#ifdef PARAMETER_KINDS
     /* ADJ runs, so no parameter page shows its title. */
     parameter_title(h)[0]=0;
-#endif
     if(private_mode(controller)) { render(controller); return; }
     if(RETURN_STATE(h[GRKIT_HOST_RETURN/4])==RETURN_PARAMETERS && ADJ_MOVIE(controller)!=1) {
         u32 root=h[GRKIT_HOST_RETURN/4]&RETURN_ROOT;
         h[GRKIT_HOST_RETURN/4]=0;
-#ifdef PARAMETER_KINDS
         /* The page has ended. A record that no page started stays unused. */
         if(h[GRKIT_HOST_PARAMETERS/4]&1U) h[GRKIT_HOST_PARAMETERS/4]=0;
-#endif
+        /* GRKit reopens at the root row of the module (menu_reopen). A page
+           that opened from a page returns to that page: Fn on a module
+           page. The page is visible, because it opened the other page. */
         enter(controller,3);
-        /* Fn starts only from Image Control, so it is visible. */
-        if(!root) {menu_open(h,0);render(controller);}
+        if(!root) {
+            menu_open(h,h[GRKIT_HOST_MODULE/4]);
+            render(controller);
+        }
+        ui_native_returned(h);
         return;
     }
     if(h[GRKIT_HOST_RETURN/4]==RETURN_GRKIT) {
@@ -367,13 +352,7 @@ A32_ENTRY void menu_refresh(u32 controller) {
     }
     menu_refresh_original(controller);
     toolbar(controller);
-    if(!h[GRKIT_HOST_MENU_REBUILDING/4] && borrowed_focus(controller)) {enter(controller,4);return;}
-#ifdef FW_SOFT_OPEN_ADJ
-    /* Stock refresh initialises the ADJ list first. enter() saves that list
-       before replacing it with the private root. Never enter twice. */
-    if(shortcut_ready(h,ADJ_MOVIE(controller)==1)) { enter(controller,3); return; }
-#endif
-    frame_preview(h,WORD(controller,ADJ_CANVAS),ADJ_MOVIE(controller)==1);
+    frame_preview(h,controller,ADJ_MOVIE(controller)==1);
 }
 /* First row of the cursor's page. The reciprocal equals row/6 for rows below 2^15
    and avoids a division helper, which the freestanding link does not provide. */
@@ -412,19 +391,21 @@ static void list_frame(u32 view,u32 rows) {
     rectangle[2]=width; rectangle[3]=60*rows;
     CALL2(WORD(WORD(view,0),0x18))(view,(u32)rectangle);
 }
-/* Show the Fn hint where Fn opens the parameter page. The native refresh
-   fills the hint only on a native slot that offers Fn, so a hint that GRKit
-   shows could be empty. Fill it as the native Image Control slot does. */
+/* Show the Fn hint where Fn opens the parameter page or the settings of a
+   module. The native refresh fills the hint only on a native slot that
+   offers Fn, so a hint that GRKit shows could be empty. Fill it as the
+   native Image Control slot does. */
+static u32 settings_target(volatile u32 *h,u32 controller,u32 fn);
 static void fn_guide(u32 controller) {
-    u32 guide=WORD(controller,ADJ_FN_GUIDE), shown=parameters_available(controller);
-#ifdef FW_GUIDE_SET_CONTENT
+    volatile u32 *h=menu_header();
+    u32 guide=WORD(controller,ADJ_FN_GUIDE), shown=parameters_row(h) ? parameters_available(controller) :
+        settings_target(h,controller,1)!=MODULE_TOTAL;
     if(shown) {
         CALL4(FW_GUIDE_SET_CONTENT)(guide,FN_GUIDE_TEXT,10,FN_GUIDE_ICON);
 #ifdef FN_GUIDE_X
         CALL2(FW_VIEW_SET_X)(guide,FN_GUIDE_X);
 #endif
     }
-#endif
     CALL2(FW_VIEW_SET_VISIBLE)(guide,shown);
 }
 /* Put the list cursor on the cursor row. After one Up or Down step (`step`
@@ -443,7 +424,7 @@ static void render_step(u32 controller,u32 step) {
     volatile u32 *h=menu_header();
     u32 cursor, start, n, i, total, kept;
     u32 view=WORD(controller,ADJ_LIST);
-    const Module *module;
+    const MenuPage *module;
     menu_normalize(h);
     cursor=h[GRKIT_HOST_MENU_CURSOR/4]; total=count(h);
     start=list_start(h,view); n=total-start;
@@ -461,14 +442,19 @@ static void render_step(u32 controller,u32 step) {
         u32 row=CALL2(FW_LIST_ROW)(view,i);
         u32 index=start+i;
         /* Private icon IDs are resolved by the host's guarded icon adapter. */
-        u32 icon=menu_row_icon(h,index);
+        u32 owner=h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? root_module(h,index) : h[GRKIT_HOST_MODULE/4];
+        u32 icon=module_icon(owner,menu_page(h,owner)->icon(h,index));
         CALL2(FW_ROW_SET_ICON)(row,icon);
-        CALL2(FW_ROW_SET_CHECK)(row,h[GRKIT_HOST_MENU_LEVEL/4]!=MENU_ROOT && index<module->rows(h) && module->checked(h,index));
+        CALL2(FW_ROW_SET_CHECK)(row,h[GRKIT_HOST_MENU_LEVEL/4]!=MENU_ROOT && module->checked(h,index));
     }
+    /* The rows selected other module pages (menu_page). */
+    module=current_module(h);
+    /* The size comes from all rows, so that a short last page keeps the
+       position of the full pages. The cursor needs the new size. */
     list_frame(view,total);
     list_cursor(view,cursor-start,n,step,kept);
-    descriptor(h+GRKIT_HOST_MENU_TITLE/4,menu_heading(h));
-    descriptor(h+GRKIT_HOST_MENU_DETAIL/4,menu_detail(h));
+    descriptor(h+GRKIT_HOST_MENU_TITLE/4,h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? grkit_title : module->title(h));
+    descriptor(h+GRKIT_HOST_MENU_DETAIL/4,h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? module->summary(h) : module->label(h,cursor));
     label(WORD(controller,ADJ_TITLE));
     /* The summary ends before the list at x=620; native labels use 400 pixels. */
     detail_width(controller,h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? 620 : 400);
@@ -479,7 +465,7 @@ static void render_step(u32 controller,u32 step) {
     fn_guide(controller);
     toolbar(controller);
     /* Slot zero's canvas is at +4, as in the live view. */
-    frame_preview(h,WORD(controller,ADJ_CANVAS),ADJ_MOVIE(controller)==1);
+    frame_preview(h,controller,ADJ_MOVIE(controller)==1);
     h[GRKIT_HOST_MENU_REBUILDING/4]=0;
 }
 static void leave(u32 controller) {
@@ -500,16 +486,14 @@ static void enter(u32 controller,u32 edge) {
     volatile u32 *h=menu_header();
     u32 view=WORD(controller,ADJ_LIST);
     h[GRKIT_HOST_MENU_CONTROLLER/4]=controller; menu_reopen(h);
-    h[GRKIT_HOST_MENU_SLOT/4]=BYTE(controller,ADJ_SLOT); h[GRKIT_HOST_MENU_EDGE/4]=edge;
-    if(borrowed_slot(controller)<5) toolbar(controller);
+    h[GRKIT_HOST_MENU_EDGE/4]=edge;
     h[GRKIT_HOST_PREVIEW/4]=0;
     CALL3(FW_LIST_SAVE)(view,(u32)(h+GRKIT_HOST_MENU_LIST/4),(u32)(h+GRKIT_HOST_MENU_LIST/4+1));
     render(controller);
 }
-static void plugin_touch(u32 controller) {
+static void grkit_touch(u32 controller) {
     if(!private_mode(controller) && ADJ_MOVIE(controller)!=1) enter(controller,3);
 }
-#ifdef PARAMETER_KINDS
 /* Fn adjustments. While GRKIT_HOST_PARAMETERS holds a record, the native
    parameter page reads and writes the adjustments of that record
    (GRKIT_RECORD_PARAMETERS) instead of the native settings, and shows the
@@ -541,15 +525,32 @@ A32_ENTRY u32 menu_parameter_set(u32 index,u32 value) {
     if(value<=8) {
         BYTE(record,GRKIT_RECORD_PARAMETERS+index)=(u8)(value>=4 ? value-4 : value+5);
         ++h[GRKIT_HOST_PARAMETER_CHANGES/4];
+        GRKIT_STATE_CHANGED(h);
     }
     return 1;
 }
-/* A page that GRKit opened starts its session. Any other page ends it. */
+/* A page that GRKit opened starts its session. A start while the session
+   runs is the same page again: a half-press changes from the page to the
+   shooting screen and back (menu_parameter_controller). A controller change
+   to any other screen ends the session, so a native page starts without
+   one. */
+static void menu_parameter_started(volatile u32 *h) {
+    u32 record=h[GRKIT_HOST_PARAMETERS/4];
+    if(record&1U) h[GRKIT_HOST_PARAMETERS/4]=record&~1U;
+}
 A32_ENTRY void menu_parameter_page_start(void) {
     volatile u32 *h=menu_header();
-    u32 record=h[GRKIT_HOST_PARAMETERS/4];
-    h[GRKIT_HOST_PARAMETERS/4]=record&1U ? record&~1U : 0;
+    menu_parameter_started(h);
     parameter_title(h)[0]=0;
+}
+/* A controller change to `id` while a session runs: it stays for the page
+   and for the shooting screen that a half-press shows over the page, and
+   ends for any other controller. A record that waits for its page to start
+   (bit 0) stays: ADJ opens the page with it. */
+static void menu_parameter_controller(volatile u32 *h,u32 id) {
+    u32 record=h[GRKIT_HOST_PARAMETERS/4];
+    if(!record || record&1U || id==IC_PARAMETERS_CONTROLLER || id==SHOOTING_CONTROLLER) return;
+    h[GRKIT_HOST_PARAMETERS/4]=0;
 }
 /* Show the Standard rows of the base set. The type is Standard, so the
    native title would read Standard. Keep the page and the effect name, so
@@ -577,66 +578,139 @@ A32_ENTRY void menu_parameter_page_snapshot(u32 model) {
     for(i=0;i<sizeof(parameter_kinds);++i)
         BYTE(model,MODEL_SNAPSHOT+parameter_kinds[i])=(u8)parameter_native(record,i);
 }
-#endif
 /* The text descriptor for `view`: the effect name for the title of a page
    that GRKit started, or 0 for native text. A page whose first word is no
    longer its vtable has ended, and its memory may hold another object. */
-A32_ENTRY u32 menu_parameter_title(u32 view) {
-#ifdef PARAMETER_KINDS
+static u32 menu_parameter_title(u32 view) {
     volatile u32 *title;
     u32 page;
     if(!menu_parameter_session()) return 0;
     title=parameter_title(menu_header());
     page=title[0];
     if(page && WORD(page,0)==title[1] && WORD(page,DETAIL_TITLE)==view) return (u32)(title+2);
-#else
-    (void)view;
-#endif
     return 0;
+}
+/* The value view of a MENU or submenu row starts its column of VALUE_COLUMN
+   pixels: a MENU row view is that wide, and a submenu row view as wide as
+   its text, which the row clips. Call after the native value setter, which
+   sets the frame. A longer text moves the view left, so that the text ends
+   VALUE_GAP pixels before the column ends, which leaves room for the arrow
+   of a submenu row. It moves at most VALUE_SHIFT pixels: the labels of
+   GRKit rows end before that. */
+#define VALUE_GAP 8
+#define VALUE_SHIFT 190
+static void fit_value(u32 view) {
+    volatile int *frame=(volatile int *)(view+VIEW_FRAME);
+    int width=(int)MENU_VIEW1(FW_STRING_VIEW_WIDTH,view), room=VALUE_COLUMN-VALUE_GAP, rect[4];
+    if(width<=room) return;
+    if(width>room+VALUE_SHIFT) width=room+VALUE_SHIFT;
+    rect[0]=frame[0]+room-width; rect[1]=frame[1]; rect[2]=width; rect[3]=frame[3];
+    CALL2(WORD(WORD(view,0),VIEW_SET_FRAME))(view,(u32)rect);
+}
+#include "menu_settings.h"
+#include "menu_section.h"
+#include "menu_about.h"
+/* The timer and UI services for modules. */
+#include "ui.h"
+/* The text descriptor for `view` and text ID `id`, or 0 for the native text.
+   Bit 0 selects the font of the menu language. GRKit gives the texts of one
+   screen, which the last controller change selects (MENU_ROWS_CURRENT): the
+   camera information page shows About GRKit, the borrowed submenu and its
+   value pages show a settings page, and another screen can show the rows of
+   the GRKit section. So the screens can use the same text IDs: the rows of
+   the GRKit section use those of the borrowed rows (MENU_ROW_LABEL_TEXT). */
+A32_ENTRY u32 menu_text_override(u32 view,u32 id) {
+    volatile u32 *h=menu_header();
+    u32 title=menu_parameter_title(view);
+    if(title) return title;
+    title=ui_text_override(h,id);
+    if(title) return title;
+    if(h[GRKIT_HOST_SERVICES/4]) {
+        u32 current=services_word(h,SERVICES_MENU+MENU_ROWS_CURRENT)[0];
+        if(current==INFO_CONTROLLER) return info_text(h,id);
+        if(settings_shows(current)) return settings_text(h,view,id);
+        return menu_rows_text(h,view,id);
+    }
+    return settings_text(h,view,id);
+}
+/* Fn on a root row or a module page with settings opens the native
+   settings page where the target has one. The page returns to where it
+   opened (menu_refresh). */
+/* The module whose settings Fn opens at the cursor, or MODULE_TOTAL: Fn on
+   a root row or on a module page. OK opens none. */
+static u32 settings_target(volatile u32 *h,u32 controller,u32 fn) {
+    u32 module, level=h[GRKIT_HOST_MENU_LEVEL/4];
+    const MenuPage *page;
+    if(ADJ_MOVIE(controller)==1) return MODULE_TOTAL;
+    if(level==MENU_ROOT) {
+        if(!fn) return MODULE_TOTAL;
+        module=root_module(h,h[GRKIT_HOST_MENU_CURSOR/4]);
+    }
+    else if(fn && level==MENU_MODULE) module=h[GRKIT_HOST_MODULE/4];
+    else return MODULE_TOTAL;
+    page=menu_page(h,module);
+    if(!page->settings) return MODULE_TOTAL;
+    /* A page with one settings row has it in MENU only: it is the page. */
+    if(page->settings==choice_settings && PAGE_WORD(CHOICE_ENTRY(h)[0],PAGE_SETTING_ROWS)<2) return MODULE_TOTAL;
+    return module;
+}
+static u32 open_settings(u32 controller,u32 fn) {
+    volatile u32 *h=menu_header();
+    u32 module=settings_target(h,controller,fn), root=h[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT;
+    if(module==MODULE_TOTAL) return 0;
+    leave(controller);
+    settings_start(h,module);
+    h[GRKIT_HOST_RETURN/4]=RETURN_OPENING|(root ? RETURN_ROOT : 0);
+    CALL3(FW_CHANGE_CONTROLLER)(controller,SETTINGS_SUBMENU,0x2000000);
+    return 1;
 }
 /* Open the native parameter page, as the native ADJ Image Control slot does
    for event 0x1b with argument 2. Refresh the model snapshot first: a cancel
    restores its type persistently. */
 static u32 open_parameters(u32 controller) {
     if(!parameters_available(controller)) return 0;
-#ifdef FW_SETTINGS_DOMAIN
+    /* leave() clears the level, so read it first. */
     u32 root=menu_header()[GRKIT_HOST_MENU_LEVEL/4]==MENU_ROOT ? RETURN_ROOT : 0;
     CALL1(FW_ADJ_SNAPSHOT)(controller);
-#ifdef PARAMETER_KINDS
     /* The page edits the adjustments of the committed effect. Bit 0 marks a
        page that has not started yet. */
     menu_header()[GRKIT_HOST_PARAMETERS/4]=menu_header()[GRKIT_HOST_ACTIVE/4]|1U;
-#endif
     leave(controller);
     /* The page returns to ADJ (0x2000000) with the native Image Control slot
        focused, where OK would confirm Standard. Come back to GRKit instead. */
     menu_header()[GRKIT_HOST_RETURN/4]=RETURN_OPENING|root;
     CALL3(FW_CHANGE_CONTROLLER)(controller,IC_PARAMETERS_CONTROLLER,0x2000000);
-#endif
     return 1;
 }
 A32_ENTRY void menu_native_touch(u32 controller,u32 slot) {
-    if(private_mode(controller) && slot==borrowed_slot(controller)) return;
     leave(controller);
     if(BYTE(controller,ADJ_SLOT)!=slot) CALL2(FW_ADJ_SELECT_SLOT)(controller,slot);
     native_focus(controller);
-    if(borrowed_focus(controller) && !private_mode(controller)) enter(controller,4);
+}
+/* GRKit leaves a page itself on OK, MENU, Fn, Left, Right, and touch. An
+   ADJ exit that GRKit did not start, such as a half-press of the shutter,
+   keeps the highlighted row of a page, as a native ADJ keeps the value under
+   its cursor. The Modules page opens settings on OK, so it commits nothing. */
+static void exit_commit(volatile u32 *h) {
+    if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE && h[GRKIT_HOST_MODULE/4]!=MANAGE_MODULE) menu_confirm(h);
 }
 A32_ENTRY void menu_exit(u32 controller) {
     volatile u32 *h=menu_header();
     u32 in_grkit=private_mode(controller);
+    if(in_grkit) exit_commit(h);
+    /* A box of the UI service closes with ADJ, and a native screen that
+       waits to open does not open. */
+    ui_close(h);
+    ui_native_cancel(h);
     leave(controller);
-    h[GRKIT_HOST_SHORTCUT_STATE/4]&=1U;
     h[GRKIT_HOST_BACK_PENDING/4]=0;
     h[GRKIT_HOST_PREVIEW/4]=0;
     h[GRKIT_HOST_FRAME_PREVIEW/4]=0;
     /* The next ADJ returns to the parameter page's GRKit page, opens on
        GRKit, or opens as native ADJ does (exit_return). */
     h[GRKIT_HOST_RETURN/4]=exit_return(h[GRKIT_HOST_RETURN/4],in_grkit);
-#ifdef PARAMETER_KINDS
     if(RETURN_STATE(h[GRKIT_HOST_RETURN/4])!=RETURN_PARAMETERS && (h[GRKIT_HOST_PARAMETERS/4]&1U)) h[GRKIT_HOST_PARAMETERS/4]=0;
     parameter_title(h)[0]=0;
-#endif
     menu_exit_original(controller);
     if(menu_header()[GRKIT_HOST_TOOLBAR_OWNER/4]==controller) {
         toolbar_visible(menu_header()[GRKIT_HOST_TOOLBAR_WIDGET/4],0);
@@ -646,6 +720,8 @@ A32_ENTRY void menu_exit(u32 controller) {
 A32_ENTRY u32 menu_destroy(u32 controller) {
     volatile u32 *h=menu_header();
     u32 widget=0, result;
+    ui_close(h);
+    ui_native_cancel(h);
     if(h[GRKIT_HOST_TOOLBAR_OWNER/4]==controller) {
         widget=h[GRKIT_HOST_TOOLBAR_WIDGET/4];
         h[GRKIT_HOST_TOOLBAR_WIDGET/4]=0;
@@ -654,10 +730,14 @@ A32_ENTRY u32 menu_destroy(u32 controller) {
         CALL2(WORD(WORD(widget,0),0x2c))(widget,0);
         CALL2(FW_VIEW_SET_PARENT)(widget+0xf0,0);
     }
-    if(h[GRKIT_HOST_MENU_CONTROLLER/4]==controller) { h[GRKIT_HOST_MENU_CONTROLLER/4]=0; h[GRKIT_HOST_MENU_LEVEL/4]=0; }
+    if(h[GRKIT_HOST_MENU_CONTROLLER/4]==controller) {
+        /* A destroy without an exit keeps the highlighted row too. */
+        exit_commit(h);
+        h[GRKIT_HOST_MENU_CONTROLLER/4]=0; h[GRKIT_HOST_MENU_LEVEL/4]=0;
+    }
     h[GRKIT_HOST_PREVIEW/4]=0;
     h[GRKIT_HOST_FRAME_PREVIEW/4]=0;
-    h[GRKIT_HOST_FRAME_PREVIEW_CANVAS/4]=0;
+    h[GRKIT_HOST_FRAME_PREVIEW_ADJ/4]=0;
     result=menu_destroy_original(controller);
     if(widget) toolbar_destroy(widget);
     return result;
@@ -677,18 +757,23 @@ A32_ENTRY void menu_changed(u32 controller) {
 A32_ENTRY u32 menu_event(u32 controller,const u16 *event) {
     volatile u32 *h=menu_header();
     u32 kind=*event, back;
-#ifdef FW_SOFT_OPEN_ADJ
-    if(kind==EV_FN) {
-        u32 argument=WORD((u32)event,4);
-        if(shortcut_consume(h,kind,BYTE(argument,0),WORD(argument,4))) return 0;
-    }
-#endif
     h[GRKIT_HOST_MENU_EVENT_RING/4+(h[GRKIT_HOST_MENU_EVENTS/4]&(GRKIT_HOST_MENU_EVENT_RING_WORDS-1))]=kind | ((kind==EV_FN || kind==EV_SWITCH || kind==EV_SWITCH_END) ? ((u32)*(u8 *)WORD((u32)event,4)<<16) :
         kind==EV_TOUCH ? (u32)BYTE(WORD((u32)event,4),0x50)<<16 : 0);
     ++h[GRKIT_HOST_MENU_EVENTS/4];
+    /* An ADJ that opened before INSTALL drew its slots without GRKit: the
+       first event after INSTALL refreshes it. */
+    if(h[GRKIT_HOST_SERVICES/4] && !services_word(h,SERVICES_MENU+MENU_ROWS_ADJ)[0]) {
+        services_word(h,SERVICES_MENU+MENU_ROWS_ADJ)[0]=1;
+        if(!private_mode(controller)) CALL1(FW_ADJ_REFRESH)(controller);
+    }
     if(kind==EV_SWITCH && !menu_press(BYTE(WORD((u32)event,4),0),WORD(WORD((u32)event,4),4))) return 0;
     back=back_event(h,kind,private_mode(controller));
     if(back==2) return 0;
+    /* A message, a confirm, or a progress box takes each key. */
+    if(private_mode(controller) && ui_modal(h)) {
+        ui_event(h,kind,back==1);
+        return 0;
+    }
     if(back==1) {
         if(menu_back(h)) { render(controller); return 0; }
         /* MENU on the root closes ADJ, as on a native entry: the restored
@@ -701,15 +786,19 @@ A32_ENTRY u32 menu_event(u32 controller,const u16 *event) {
 #ifdef EV_FN_ACTION
     /* The Fn press that opened a GRKit parameter page also sends its native
        action. The native page must not open for it. */
-    if(kind==EV_FN_ACTION && (RETURN_STATE(h[GRKIT_HOST_RETURN/4])==RETURN_OPENING || RETURN_STATE(h[GRKIT_HOST_RETURN/4])==RETURN_PARAMETERS)) return 0;
+    if(kind==EV_FN_ACTION && (RETURN_STATE(h[GRKIT_HOST_RETURN/4])==RETURN_OPENING ||
+                              RETURN_STATE(h[GRKIT_HOST_RETURN/4])==RETURN_PARAMETERS)) return 0;
 #endif
     if(!private_mode(controller)) {
         /* OK or ADJ press on the native Image Control slot confirms a native value.
            Confirming the existing native type can omit its setter entirely. */
-        if(kind==EV_CONFIRM && !borrowed_focus(controller) && !after_menu_switch(h) &&
-           CALL2(FW_ADJ_SLOT_TYPE)(controller,BYTE(controller,ADJ_SLOT))==ADJ_IC_SLOT_TYPE)
+        if(kind==EV_CONFIRM && !after_menu_switch(h) &&
+           CALL2(FW_ADJ_SLOT_TYPE)(controller,BYTE(controller,ADJ_SLOT))==ADJ_IC_SLOT_TYPE) {
             h[GRKIT_HOST_ACTIVE/4]=0;
-        if(ADJ_MOVIE(controller)!=1 && borrowed_slot(controller)==5 &&
+            GRKIT_STATE_CHANGED(h);
+            level_reapply(h);
+        }
+        if(ADJ_MOVIE(controller)!=1 &&
            ((kind==EV_RIGHT && BYTE(controller,ADJ_SLOT)==4) ||
             (kind==EV_LEFT && BYTE(controller,ADJ_SLOT)==0))) {
             enter(controller,kind==EV_RIGHT ? 1 : 2); return 0;
@@ -719,51 +808,24 @@ A32_ENTRY u32 menu_event(u32 controller,const u16 *event) {
             u32 result=menu_event_original(controller,event);
             u32 next=BYTE(controller,ADJ_SLOT);
             u32 edge=wrapped_edge(kind,old,next,ADJ_MOVIE(controller));
-            if(edge && borrowed_slot(controller)==5) enter(controller,edge);
+            if(edge) enter(controller,edge);
             else if(next!=old) native_focus(controller);
             return result;
         }
     }
     menu_normalize(h);
     /* On an effect row, commit the highlighted row, then adjust its parameters.
-       Fn on Off does nothing. */
-    if(kind==EV_FN && *(u8 *)WORD((u32)event,4)==FN_PRESS_ARG &&
-       current_module(h)->parameters) {
-        if(!parameters_row(h)) return 0;
+       On the root row, adjust the committed effect. Fn on Off does nothing. */
+    if(kind==EV_FN && *(u8 *)WORD((u32)event,4)==FN_PRESS_ARG && parameters_row(h)) {
         if(h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE) current_module(h)->apply(h,h[GRKIT_HOST_MENU_CURSOR/4]);
         if(!open_parameters(controller)) render(controller);
         return 0;
     }
-    if(kind==EV_RIGHT) {
-        if(menu_right(h)) render(controller);
-        return 0;
-    }
-    if(kind==EV_LEFT) {
-        if((h[GRKIT_HOST_MENU_LEVEL/4]>MENU_ROOT || h[GRKIT_HOST_MENU_SECTION/4]) && kind==EV_LEFT && menu_back(h)) {
-            render(controller); return 0;
-        }
-        if(borrowed_slot(controller)<5) {
-            SoftAdjSlots plan=controller_slots(controller);u32 previous=adj_slot_previous(plan);
-            leave(controller);
-            if(previous<5) {menu_native_touch(controller,previous);return 0;}
-            {const u16 confirm[4]={EV_CONFIRM,0,0,0};h[GRKIT_HOST_RETURN/4]=RETURN_CLOSING;return menu_event_original(controller,confirm);}
-        }
-        {
-            u32 edge=h[GRKIT_HOST_MENU_EDGE/4], advance=advance_from_private(kind,edge);
-            leave(controller);
-            if(edge==3) {
-                u32 i;
-                for(i=0;i<5;++i) {
-                    u32 slot=kind==EV_LEFT ? 4-i : i;
-                    if(!CALL2(FW_ADJ_SLOT_TYPE)(controller,slot)) continue;
-                    menu_native_touch(controller,slot);
-                    if(BYTE(controller,ADJ_SLOT)==slot) break;
-                }
-                return 0;
-            }
-            return advance ? menu_event_original(controller,event) : 0;
-        }
-    }
+    /* Fn elsewhere opens the detail settings of the module, if it has any. */
+    if(kind==EV_FN && *(u8 *)WORD((u32)event,4)==FN_PRESS_ARG && open_settings(controller,1)) return 0;
+    /* Soft hierarchy: Right opens, Left backs out; ADJ exits. */
+    if(kind==EV_RIGHT) {menu_confirm(h);render(controller);return 0;}
+    if(kind==EV_LEFT) {if(menu_back(h)){render(controller);return 0;}leave(controller);return 0;}
     if(kind==EV_UP || kind==EV_DIAL_UP || kind==EV_DOWN || kind==EV_DIAL_DOWN) {
         u32 n=count(h);
         if(kind==EV_UP || kind==EV_DIAL_UP) h[GRKIT_HOST_MENU_CURSOR/4]=h[GRKIT_HOST_MENU_CURSOR/4] ? h[GRKIT_HOST_MENU_CURSOR/4]-1 : n-1;
@@ -771,16 +833,21 @@ A32_ENTRY u32 menu_event(u32 controller,const u16 *event) {
         highlight(h);
         render_step(controller,kind==EV_UP || kind==EV_DIAL_UP ? (u32)-1 : 1); return 0;
     }
-    /* OK applies in place so several settings can be adjusted in one visit.
-       Only a physical ADJ press forwards the closing native confirm. MENU
-       and Left retain their own parent/exit handling above. */
+    /* Confirm is 0xd8. Press and release events do not activate a profile.
+       OK on a root row opens its page. OK on a page row commits it and closes
+       ADJ, as OK on a native value does: the restored native list gets the
+       confirm, as after MENU on the root. An ADJ press closes ADJ from the
+       root too, as on a native entry; on a page it commits the row first.
+       If the commit made a module show a UI box or ask for a native screen,
+       ADJ stays open on the page instead (ui_holds_page). */
     if(kind==EV_CONFIRM) {
-        u32 page=h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE;
-        u32 close=0;
-#ifdef EV_ADJ_PRESS
+        u32 page=h[GRKIT_HOST_MENU_LEVEL/4]==MENU_MODULE, close=0;
+        /* OK on the Modules page opens the settings of the row. */
+        if(page && h[GRKIT_HOST_MODULE/4]==MANAGE_MODULE) close=0;
         if(after_adj_press(h)) close=1;
-#endif
+        /* Native detail settings remain available with Fn and in MENU. */
         if(page || !close) menu_confirm(h);
+        if(close && ui_holds_page(h)) close=0;
         if(close) {
             leave(controller);
             h[GRKIT_HOST_RETURN/4]=RETURN_CLOSING;
@@ -805,21 +872,34 @@ static u32 playback_icon(volatile u32 *h,u32 value) {
             return 0x8000+i;
     return 0;
 }
-#ifdef METADATA_TONE
 /* The playback metadata singleton holds key 0x25 at METADATA_TONE. */
 u32 menu_playback_private(void) {
     return playback_icon(menu_header(),WORD(CALL0(FW_PLAYBACK_METADATA)(),METADATA_TONE));
 }
-#endif
+_Static_assert(GRKIT_ICONS_PER_CHUNK==40 && (GRKIT_HOST_ICON_CHUNKS_WORDS*40)*1639U>>16==GRKIT_HOST_ICON_CHUNKS_WORDS*40/40,
+               "The module tile chunk uses slot / 40");
 /* IDs stay in transient private widgets and never enter native settings. */
-A32_ENTRY u32 menu_icon(u32 id) {
-    volatile u32 *h=menu_header();
+static u32 icon_address(volatile u32 *h,u32 id) {
     u32 index=id-0x8000;
-    /* Plugin tiles are contiguous from the first one. */
-    if(id-PLUGIN_ICON<PLUGIN_TILES)
-        return h[GRKIT_HOST_TILE_ICON/4]+(id-PLUGIN_ICON)*GRKIT_ICON_STRIDE;
-    if(id==GRKIT_ICON_GRKIT) return h[GRKIT_HOST_PLUGINS_ICON/4];
+    /* Module tiles follow the effect icons in the chunks. slot * 1639 >> 16
+       is slot / 40 for each slot of the chunks. */
+    if(id-GRKIT_ICON_MODULE_TILE(0)<GRKIT_MODULE_TILES_MAX) {
+        u32 slot=GRKIT_HOST_ICON_COUNT+h[GRKIT_HOST_COUNT/4]+id-GRKIT_ICON_MODULE_TILE(0), chunk=slot*1639U>>16;
+        if(chunk>=GRKIT_HOST_ICON_CHUNKS_WORDS || !h[GRKIT_HOST_ICON_CHUNKS/4+chunk]) return 0;
+        return h[GRKIT_HOST_ICON_CHUNKS/4+chunk]+(slot-chunk*GRKIT_ICONS_PER_CHUNK)*GRKIT_ICON_STRIDE;
+    }
+    if(id==GRKIT_ICON_GRKIT) return h[GRKIT_HOST_GRKIT_ICON/4];
+    /* The installer puts the Version icon after the GRKit icon. */
+    if(id==GRKIT_ICON_VERSION) return h[GRKIT_HOST_GRKIT_ICON/4] ? h[GRKIT_HOST_GRKIT_ICON/4]+GRKIT_ICON_STRIDE : 0;
+    /* The Modules icon follows the Version icon. */
+    if(id==GRKIT_ICON_MODULES) return h[GRKIT_HOST_GRKIT_ICON/4] ? h[GRKIT_HOST_GRKIT_ICON/4]+2*GRKIT_ICON_STRIDE : 0;
     if(id==0x7fff) return h[GRKIT_HOST_OFF_ICON/4] ? h[GRKIT_HOST_OFF_ICON/4] : NATIVE_OFF_ICON();
     if(index>=h[GRKIT_HOST_COUNT/4]) return 0;
     return WORD(h[GRKIT_HOST_RECORDS/4]+index*GRKIT_RECORD_SIZE,GRKIT_RECORD_ICON);
+}
+A32_ENTRY u32 menu_icon(u32 id) {
+    volatile u32 *h=menu_header();
+    u32 start=profile_begin(h), icon=icon_address(h,id);
+    profile_end(h,start,GRKIT_PROFILE_MENU_ICON);
+    return icon;
 }

@@ -1,0 +1,27 @@
+id = "SOFTSPLT"
+version = 1
+order = 80
+sources = ["soft.c"]
+tiles = ["tiles/soft-0.png", "tiles/soft-1.png", "tiles/soft-2.png"]
+
+[[settings]]
+key = "PRESET"
+values = 9
+saved = true
+public = true
+
+[[settings]]
+key = "STRENGTH"
+values = 21
+saved = true
+public = true
+
+[page]
+setting = "PRESET"
+off_row = true
+settings = ["PRESET", "STRENGTH"]
+
+[[filters]]
+apply = "soft_split"
+setting = "PRESET"
+stage = "split"

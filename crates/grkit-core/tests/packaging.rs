@@ -1,18 +1,17 @@
 use std::io::{Cursor, Read, Write};
 
-use grkit_core::{camera, effects, modules::Selection, packaging::*, runtime, Files};
+use grkit_core::{
+    camera, guide::installation_guide, language::Language, packaging::*, runtime, testing, Files,
+};
 use serde_json::{json, Value};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 fn runtime_fixture() -> Files {
-    let mut binary = vec![0; 52];
-    binary[..6].copy_from_slice(b"\x7fELF\x01\x01");
-    binary[16..20].copy_from_slice(b"\x02\x00\x28\x00");
-    runtime::runtime_files(&binary)
+    testing::runtime_files(&testing::installer(), "gr3-2.10")
 }
 
-fn build() -> Value {
-    json!({"target": "gr3-2.10", "profile": "production", "startup_activation": "Off"})
+fn runtime() -> VerifiedRuntime {
+    testing::runtime("gr3-2.10")
 }
 
 /// A stand-in for a guide PDF, which the release builds with Typst.
@@ -25,27 +24,16 @@ fn english() -> Guide<'static> {
     }
 }
 
-fn effect(id: &str) -> (String, Vec<u8>) {
-    let curve: Vec<_> = (0..256).map(|i| i * 64).collect();
-    let value = json!({"effect_id": id, "name": "Test", "flags": 0,
-        "matrix": [8192, 0, 0, 0, 8192, 0, 0, 0, 8192],
-        "curves": [&curve, &curve, &curve]});
-    (
-        effects::filename(id).unwrap(),
-        effects::encode(&value, &vec![0; 6400]).unwrap(),
-    )
-}
-
 fn package() -> Vec<u8> {
     assemble(
-        &runtime_fixture(),
-        &build(),
-        &Files::from([effect("test-effect")]),
-        Selection::ALL,
+        &[runtime()],
+        &testing::effect_set(&["test-effect"]),
+        &testing::official_modules(),
         &camera::GR3,
         &english(),
     )
     .unwrap()
+    .bytes
 }
 
 fn with_sums(mut files: Files) -> Files {
@@ -89,8 +77,8 @@ fn package_round_trip_is_deterministic_and_preserves_metadata() {
     let first = package();
     assert_eq!(first, package());
     let verified = verify_package(&first).unwrap();
-    assert_eq!(verified["effect_ids"], json!(["test-effect"]));
-    assert_eq!(verified["target"], json!("gr3-2.10"));
+    assert_eq!(verified.effect_ids, ["test-effect"]);
+    assert_eq!(verified.targets, ["gr3-2.10"]);
     let mut archive = ZipArchive::new(Cursor::new(first)).unwrap();
     for index in 0..archive.len() {
         let entry = archive.by_index(index).unwrap();
@@ -134,7 +122,7 @@ fn manifests_notices_and_extra_documents_are_rejected() {
         "NOTICES/EFFECTS.md",
         "RECOVERY.md",
         "INSTALLATION.md",
-        "images/grkit-root.png",
+        "images/grkit-root.jpg",
     ] {
         let mut extra = files.clone();
         extra.insert(name.into(), b"{}".to_vec());
@@ -231,17 +219,10 @@ fn production_boundaries_are_enforced() {
         ("startup_activation", "test-effect"),
         ("target", "other"),
     ] {
-        let mut altered = build();
+        let files = runtime_fixture();
+        let mut altered = manifest("gr3-2.10", &files);
         altered[key] = json!(value);
-        assert!(assemble(
-            &runtime_fixture(),
-            &altered,
-            &Files::new(),
-            Selection::ALL,
-            &camera::GR3,
-            &english()
-        )
-        .is_err());
+        assert!(load_runtime(&json_bytes(&Value::Object(altered)).unwrap(), &files).is_err());
     }
     for suffix in [b"--select test-effect".as_slice(), b"changed"] {
         let mut altered = runtime_fixture();
@@ -255,142 +236,94 @@ fn production_boundaries_are_enforced() {
 
 #[test]
 fn target_capacity_and_empty_effect_selection_are_supported() {
-    let mut effects: Files = (0..runtime::MAX_COUNT)
-        .map(|i| effect(&format!("effect-{i}")))
-        .collect();
+    let mut effects = EffectSet::default();
+    for i in 0..runtime::MAX_COUNT {
+        effects
+            .insert(testing::effect(&format!("effect-{i}")))
+            .unwrap();
+    }
     let bytes = assemble(
-        &runtime_fixture(),
-        &build(),
+        &[runtime()],
         &effects,
-        Selection::ALL,
+        &testing::official_modules(),
         &camera::GR3,
         &english(),
     )
-    .unwrap();
+    .unwrap()
+    .bytes;
     assert_eq!(
-        verify_package(&bytes).unwrap()["effect_ids"]
-            .as_array()
-            .unwrap()
-            .len(),
+        verify_package(&bytes).unwrap().effect_ids.len(),
         runtime::MAX_COUNT
     );
-    effects.extend([effect("effect-overflow")]);
-    assert!(assemble(
-        &runtime_fixture(),
-        &build(),
-        &effects,
-        Selection::ALL,
-        &camera::GR3,
-        &english()
-    )
-    .is_err());
+    let error = effects
+        .insert(testing::effect("effect-overflow"))
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("at most {} effects", runtime::MAX_COUNT)),
+        "{error}"
+    );
     let bytes = assemble(
-        &runtime_fixture(),
-        &build(),
-        &Files::new(),
-        Selection::ALL,
+        &[runtime()],
+        &EffectSet::default(),
+        &testing::official_modules(),
         &camera::GR3,
         &english(),
     )
-    .unwrap();
-    assert_eq!(verify_package(&bytes).unwrap()["effect_ids"], json!([]));
+    .unwrap()
+    .bytes;
+    assert_eq!(
+        verify_package(&bytes).unwrap().effect_ids,
+        Vec::<String>::new()
+    );
 }
 
 #[test]
-fn selected_plugins_are_packaged_and_verified() {
-    let effects = Files::from([effect("test-effect")]);
-    let plugins = Selection::from_names(["date-stamp", "image-control"]).unwrap();
-    let bytes = assemble(
-        &runtime_fixture(),
-        &build(),
-        &effects,
-        plugins,
-        &camera::GR3,
-        &english(),
-    )
-    .unwrap();
+fn selected_modules_are_packaged_and_verified() {
+    let effects = testing::effect_set(&["test-effect"]);
+    let modules = [testing::module("DATE"), testing::module("FILMLOOK")];
+    let bytes = assemble(&[runtime()], &effects, &modules, &camera::GR3, &english())
+        .unwrap()
+        .bytes;
     let files = unpack(&bytes);
+    assert!(files.contains_key("SD_ROOT/SCRIPT/GRKIT/MODULES/DATE.GRM"));
+    assert!(files.contains_key("SD_ROOT/SCRIPT/GRKIT/MODULES/FILMLOOK.GRM"));
     assert_eq!(
-        files["SD_ROOT/SCRIPT/PLUGINS/PLUGINS.TXT"],
-        b"image-control\ndate-stamp\n"
+        verify_package(&bytes).unwrap().modules,
+        ["DATE", "FILMLOOK"]
     );
-    assert_eq!(
-        verify_package(&bytes).unwrap()["plugins"],
-        json!(["image-control", "date-stamp"])
-    );
-    // A package with every plugin has no file and keeps its earlier bytes.
-    let plain = assemble(
-        &runtime_fixture(),
-        &build(),
-        &effects,
-        Selection::ALL,
-        &camera::GR3,
-        &english(),
-    )
-    .unwrap();
-    assert!(!unpack(&plain).contains_key("SD_ROOT/SCRIPT/PLUGINS/PLUGINS.TXT"));
-    assert_eq!(
-        verify_package(&plain).unwrap()["plugins"],
-        json!(grkit_core::modules::NAMES)
-    );
-    assert_eq!(plain, package());
-}
-
-#[test]
-fn invalid_plugin_files_and_empty_menus_are_rejected() {
-    for text in [
-        b"hdr\n".as_slice(),
-        b"guides guides",
-        b"Framing",
-        b"framing,guides",
-        b"\xff",
-        // Nothing to show.
-        b"",
-    ] {
-        let mut files = unpack(&package());
-        files.insert("SD_ROOT/SCRIPT/PLUGINS/PLUGINS.TXT".into(), text.to_vec());
-        assert!(
-            validate_contents(&with_sums(files)).is_err(),
-            "{}",
-            String::from_utf8_lossy(text)
-        );
-    }
+    // The plugin list of GRKit 1.x is not part of a package.
     let mut files = unpack(&package());
     files.insert(
-        "SD_ROOT/SCRIPT/PLUGINS/PLUGINS.TXT".into(),
-        b" guides\r\n\tframing ".to_vec(),
+        "SD_ROOT/SCRIPT/GRKIT/PLUGINS.TXT".into(),
+        b"image-control\n".to_vec(),
     );
-    assert_eq!(
-        validate_contents(&with_sums(files))
-            .unwrap()
-            .plugins
-            .names(),
-        ["framing", "guides"]
-    );
-    // Image Control alone needs effects.
-    let image_control = Selection::from_names(["image-control"]).unwrap();
-    assert!(assemble(
-        &runtime_fixture(),
-        &build(),
-        &Files::new(),
-        image_control,
-        &camera::GR3,
-        &english()
-    )
-    .is_err());
-    let bytes = assemble(
-        &runtime_fixture(),
-        &build(),
-        &Files::from([effect("test-effect")]),
-        image_control,
-        &camera::GR3,
-        &english(),
-    )
-    .unwrap();
-    assert_eq!(
-        verify_package(&bytes).unwrap()["plugins"],
-        json!(["image-control"])
-    );
+    assert!(validate_contents(&with_sums(files)).is_err());
+}
+
+#[test]
+fn packages_that_show_nothing_are_rejected() {
+    let assemble_with = |effects: &[&str], modules: &[&str]| {
+        let modules: Vec<_> = modules.iter().map(|id| testing::module(id)).collect();
+        assemble(
+            &[runtime()],
+            &testing::effect_set(effects),
+            &modules,
+            &camera::GR3,
+            &english(),
+        )
+    };
+    // No module.
+    assert!(assemble_with(&[], &[]).is_err());
+    // Image Control shows only with effects.
+    assert!(assemble_with(&[], &["FILMLOOK"]).is_err());
+    assert!(assemble_with(&["test-effect"], &["FILMLOOK"]).is_ok());
+    // Effects need Image Control.
+    assert!(assemble_with(&["test-effect"], &["FRAMING"]).is_err());
+    assert!(assemble_with(&[], &["FRAMING"]).is_ok());
+    // A module of another author shows its own page.
+    assert!(assemble_with(&[], &["PROBE"]).is_ok());
 }
 
 #[test]
@@ -431,16 +364,16 @@ fn json_matches_existing_ascii_pretty_format() {
 
 #[test]
 fn runtime_layout_matches_target_capacity() {
-    assert_eq!(runtime::MAX_COUNT, 20);
+    assert_eq!(runtime::MAX_COUNT, 40);
     assert_eq!(
         runtime::layout(0).unwrap(),
-        json!({"words": 40306, "icon_words": [32040]})
+        json!({"words": 192, "tail_words": 45743, "icon_words": [6408]})
     );
     assert_eq!(
-        runtime::layout(20).unwrap(),
-        json!({"words": 49586, "icon_words": [64080]})
+        runtime::layout(40).unwrap(),
+        json!({"words": 43712, "tail_words": 45743, "icon_words": [64080, 6408]})
     );
-    assert!(runtime::layout(21).is_err());
+    assert!(runtime::layout(41).is_err());
 }
 
 #[test]
@@ -454,22 +387,26 @@ fn allocation_includes_host_icons_at_chunk_boundaries() {
             .iter()
             .map(|v| v.as_u64().unwrap() as usize)
             .collect();
-        // Picture scratch (the date stamp masks, then the shot ring), then the menu text.
+        // The registry holds the header and the records. The tail holds the
+        // picture scratch (the date stamp masks, then the shot ring), the menu
+        // text, the live-view labels, then the profile table (8 modules of 16
+        // bytes, 31 counter slots of 12 bytes).
+        assert_eq!(words * 4, 768 + count * 0x1100, "count {count}");
         assert_eq!(
-            words * 4,
-            320 + count * 0x740 + 141376 + 72 + 19456,
-            "count {count}"
+            layout["tail_words"].as_u64().unwrap() as usize * 4,
+            141376 + 8 + 8 * 16 + 24576 + 16384 + 128 + 31 * 12
         );
         assert_eq!(
             icons.iter().sum::<usize>() * 4,
-            (count + 20) * 6408,
+            (count + 4) * 6408,
             "count {count}"
         );
         assert!(std::iter::once(&words)
             .chain(&icons)
             .all(|v| (1..=65536).contains(v)));
-        // The capacity fits one 40-icon chunk with the sixteen host icons.
-        assert_eq!(icons.len(), 1);
+        // The 4 host icons come first, then the effects, 40 icons in each
+        // chunk. Module tiles follow the effects (runtime/installer.c).
+        assert_eq!(icons.len(), (count + 4).div_ceil(40), "count {count}");
     }
     assert!(runtime::layout(usize::MAX).is_err());
 }
@@ -528,19 +465,10 @@ fn symlink_and_encrypted_entries_are_rejected() {
 #[test]
 fn runtime_builds_must_match_their_manifest_exactly() {
     let files = runtime_fixture();
-    let manifest = |files: &Files| {
-        let mut value = build();
-        value["files"] = files
-            .iter()
-            .map(
-                |(path, bytes)| json!({"path": path, "size": bytes.len(), "sha256": sha256(bytes)}),
-            )
-            .collect();
-        json_bytes(&value).unwrap()
-    };
-    let (runtime, loaded) = load_runtime(&manifest(&files), &files).unwrap();
-    assert_eq!(runtime, files);
-    assert_eq!(loaded["target"], json!("gr3-2.10"));
+    let manifest = |files: &Files| testing::manifest("gr3-2.10", files);
+    let runtime = load_runtime(&manifest(&files), &files).unwrap();
+    assert_eq!(runtime.files(), &files);
+    assert_eq!(runtime.target(), "gr3-2.10");
 
     let mut extra = files.clone();
     extra.insert("SCRIPT/EXTRA.SH".into(), b"x".to_vec());
@@ -565,31 +493,34 @@ fn runtime_builds_must_match_their_manifest_exactly() {
 
 #[test]
 fn each_camera_gets_its_modeset_file_and_guide() {
-    let effects = Files::from([effect("test-effect")]);
+    let effects = testing::effect_set(&["test-effect"]);
     let gr3 = unpack(&package());
     let bytes = assemble(
-        &runtime_fixture(),
-        &build(),
+        &[runtime()],
         &effects,
-        Selection::ALL,
+        &testing::official_modules(),
         &camera::GR3X,
         &english(),
     )
-    .unwrap();
+    .unwrap()
+    .bytes;
     let verified = verify_package(&bytes).unwrap();
-    assert_eq!(verified["camera"], "gr3x");
-    assert_eq!(verified["target"], "gr3-2.10");
+    assert_eq!(verified.camera.id, "gr3x");
+    assert_eq!(verified.targets, ["gr3-2.10"]);
     let gr3x = unpack(&bytes);
     assert!(gr3x.contains_key("SD_ROOT/00078490.609"));
     assert!(!gr3x.contains_key("SD_ROOT/00078350.588"));
     // The guide source names GR IIIx, GR IIIx HDF, and their ModeSet file.
     let guide = String::from_utf8(installation_guide(&camera::GR3X, Language::English)).unwrap();
-    assert!(guide.contains("For RICOH GR IIIx and GR IIIx HDF firmware 1.60 only."));
-    assert!(guide.contains("GRKit has not been tested on a GR IIIx HDF camera."));
+    assert!(guide.contains("For RICOH GR IIIx and GR IIIx HDF firmware 1.60 or 1.70 only."));
     assert!(guide.contains("`00078490.609`") && !guide.contains("00078350.588"));
+    // The GR III guide is the resource with each release of its runtime build.
     assert_eq!(
-        installation_guide(&camera::GR3, Language::English),
-        include_bytes!("../../../resources/INSTALLATION.md")
+        String::from_utf8(installation_guide(&camera::GR3, Language::English)).unwrap(),
+        include_str!("../../../resources/INSTALLATION.md").replace(
+            "GR III HDF firmware 2.10 only.",
+            "GR III HDF firmware 2.10 or 2.20 only."
+        )
     );
     // Every runtime and effect file is the same for both cameras.
     for (name, blob) in &gr3 {
@@ -619,12 +550,20 @@ fn the_guide_names_the_camera_once_and_the_modeset_file_twice() {
             Language::Japanese,
             include_str!("../../../resources/INSTALLATION.ja.md"),
         ),
+        (
+            Language::Korean,
+            include_str!("../../../resources/INSTALLATION.ko.md"),
+        ),
     ] {
-        let phrase = language.camera_phrase(&camera::GR3);
+        // The resource names the first GR III release; the package guide
+        // names each release of the runtime build.
+        let phrase = language.camera_phrase(&camera::GR3, &["2.10"]);
         assert_eq!(guide.matches(&phrase).count(), 1, "{phrase}");
-        // The phrase and the note that GR III HDF has not been tested.
-        assert_eq!(guide.matches(camera::GR3.hdf).count(), 2, "{language:?}");
-        // After installation, and in the steps that turn SD scripts off.
+        let source = String::from_utf8(installation_guide(&camera::GR3, language)).unwrap();
+        let releases = language.camera_phrase(&camera::GR3, &["2.10", "2.20"]);
+        assert_eq!(source.matches(&releases).count(), 1, "{releases}");
+        assert_eq!(guide.matches(camera::GR3.hdf).count(), 1, "{language:?}");
+        // After the installation, and in the steps that turn SD scripts off.
         assert_eq!(
             guide.matches(camera::GR3.modeset).count(),
             2,
@@ -634,27 +573,60 @@ fn the_guide_names_the_camera_once_and_the_modeset_file_twice() {
 }
 
 #[test]
+fn the_gr4_guide_names_each_release_once() {
+    // installation_guide replaces the phrase, so it must occur exactly once.
+    for (language, guide) in [
+        (
+            Language::English,
+            include_str!("../../../resources/INSTALLATION-GR4.md"),
+        ),
+        (
+            Language::SimplifiedChinese,
+            include_str!("../../../resources/INSTALLATION-GR4.zh-Hans.md"),
+        ),
+        (
+            Language::TraditionalChinese,
+            include_str!("../../../resources/INSTALLATION-GR4.zh-Hant.md"),
+        ),
+        (
+            Language::Japanese,
+            include_str!("../../../resources/INSTALLATION-GR4.ja.md"),
+        ),
+        (
+            Language::Korean,
+            include_str!("../../../resources/INSTALLATION-GR4.ko.md"),
+        ),
+    ] {
+        let phrase = language.camera_phrase(&camera::GR4, &["1.11"]);
+        assert_eq!(guide.matches(&phrase).count(), 1, "{phrase}");
+        let source = String::from_utf8(installation_guide(&camera::GR4, language)).unwrap();
+        let releases = language.camera_phrase(&camera::GR4, &["1.11", "1.20"]);
+        assert_eq!(source.matches(&releases).count(), 1, "{releases}");
+    }
+}
+
+#[test]
 fn a_package_has_the_guide_of_its_language_only() {
-    let effects = Files::from([effect("test-effect")]);
+    let effects = testing::effect_set(&["test-effect"]);
     for language in Language::ALL {
         let bytes = assemble(
-            &runtime_fixture(),
-            &build(),
+            &[runtime()],
             &effects,
-            Selection::ALL,
+            &testing::official_modules(),
             &camera::GR3X,
             &Guide { language, pdf: PDF },
         )
-        .unwrap();
-        assert_eq!(verify_package(&bytes).unwrap()["language"], language.code());
+        .unwrap()
+        .bytes;
+        assert_eq!(verify_package(&bytes).unwrap().language, language);
         let files = unpack(&bytes);
         assert_eq!(files[&language.guide_path()], PDF);
         let guides = files.keys().filter(|name| name.ends_with(".pdf")).count();
         assert_eq!(guides, 1, "{language:?}");
         // The guide source names GR IIIx and GR IIIx HDF in each language.
         let source = String::from_utf8(installation_guide(&camera::GR3X, language)).unwrap();
-        assert!(source.contains(&language.camera_phrase(&camera::GR3X)));
-        assert_eq!(source.matches(camera::GR3X.hdf).count(), 2, "{language:?}");
+        assert!(source.contains(&language.camera_phrase(&camera::GR3X, &["1.60", "1.70"])));
+        assert_eq!(source.matches(camera::GR3X.hdf).count(), 1, "{language:?}");
         assert!(!source.contains(camera::GR3.hdf));
         assert!(source.contains(camera::GR3X.modeset) && !source.contains(camera::GR3.modeset));
     }
@@ -665,11 +637,18 @@ fn a_package_has_the_guide_of_its_language_only() {
             "GRKit 安装指南.pdf",
             "GRKit 安裝指南.pdf",
             "GRKit インストールガイド.pdf",
+            "GRKit 설치 가이드.pdf",
         ]
     );
+    // The GR IV guide names both releases of GR IV; each has its own build.
     assert_eq!(
-        installation_guide(&camera::GR4, Language::TraditionalChinese),
-        include_bytes!("../../../resources/INSTALLATION-GR4.zh-Hant.md")
+        String::from_utf8(installation_guide(
+            &camera::GR4,
+            Language::TraditionalChinese
+        ))
+        .unwrap(),
+        include_str!("../../../resources/INSTALLATION-GR4.zh-Hant.md")
+            .replace("GR IV HDF 韌體 1.11。", "GR IV HDF 韌體 1.11 或 1.20。")
     );
 }
 
@@ -690,16 +669,16 @@ fn a_package_has_exactly_one_pdf_guide() {
         pdf: b"# GRKit\n",
     };
     assert!(assemble(
-        &runtime_fixture(),
-        &build(),
-        &Files::new(),
-        Selection::ALL,
+        &[runtime()],
+        &EffectSet::default(),
+        &testing::official_modules(),
         &camera::GR3,
         &text_guide,
     )
     .is_err());
     assert!(Language::parse("fr").is_err());
     assert_eq!(Language::parse("ja").unwrap(), Language::Japanese);
+    assert_eq!(Language::parse("ko").unwrap(), Language::Korean);
 }
 
 #[test]
@@ -721,80 +700,67 @@ fn a_package_has_the_modeset_file_of_exactly_one_camera() {
     assert_eq!(camera::find("gr4").unwrap(), &camera::GR4);
 }
 
-fn gr4_runtime_fixture() -> Files {
-    let mut binary = vec![0; 52];
-    binary[..6].copy_from_slice(b"\x7fELF\x01\x01");
-    binary[16..20].copy_from_slice(b"\x02\x00\x28\x00");
-    runtime::runtime_files_for(&binary, runtime::icon_stride("gr4-1.11").unwrap())
-}
-
-fn gr4_build() -> Value {
-    json!({"target": "gr4-1.11", "profile": "production", "startup_activation": "Off"})
+fn gr4_runtimes() -> Vec<VerifiedRuntime> {
+    testing::camera_runtimes(&camera::GR4)
 }
 
 #[test]
 fn a_gr4_package_has_its_modeset_file_guide_and_modules() {
-    let runtime = gr4_runtime_fixture();
     let bytes = assemble(
-        &runtime,
-        &gr4_build(),
-        &Files::new(),
-        Selection::from_names(camera::GR4.plugins.iter().copied()).unwrap(),
+        &gr4_runtimes(),
+        &EffectSet::default(),
+        &testing::official_modules(),
         &camera::GR4,
         &english(),
     )
-    .unwrap();
+    .unwrap()
+    .bytes;
     let verified = verify_package(&bytes).unwrap();
-    assert_eq!(verified["camera"], "gr4");
-    assert_eq!(verified["target"], "gr4-1.11");
+    assert_eq!(verified.camera.id, "gr4");
+    assert_eq!(verified.targets, ["gr4-1.11", "gr4-1.20", "gr4-1.20-0528"]);
     let files = unpack(&bytes);
     assert!(files.contains_key("SD_ROOT/00078560.636"));
     assert_eq!(files["GRKit Installation Guide.pdf"], PDF);
     assert_eq!(
-        installation_guide(&camera::GR4, Language::English),
-        include_bytes!("../../../resources/INSTALLATION-GR4.md")
+        String::from_utf8(installation_guide(&camera::GR4, Language::English)).unwrap(),
+        include_str!("../../../resources/INSTALLATION-GR4.md").replace(
+            "GR IV HDF firmware 1.11 only.",
+            "GR IV HDF firmware 1.11 or 1.20 only."
+        )
     );
     // A GR III runtime does not run on GR IV.
     assert!(assemble(
-        &runtime_fixture(),
-        &build(),
-        &Files::new(),
-        Selection::from_names(camera::GR4.plugins.iter().copied()).unwrap(),
+        &[runtime()],
+        &EffectSet::default(),
+        &testing::official_modules(),
         &camera::GR4,
         &english()
     )
     .is_err());
     // GR IV has Image Control.
     let bytes = assemble(
-        &runtime,
-        &gr4_build(),
-        &Files::from([effect("test-effect")]),
-        Selection::from_names(camera::GR4.plugins.iter().copied()).unwrap(),
+        &gr4_runtimes(),
+        &testing::effect_set(&["test-effect"]),
+        &testing::official_modules(),
         &camera::GR4,
         &english(),
     )
-    .unwrap();
-    assert_eq!(
-        verify_package(&bytes).unwrap()["effect_ids"],
-        json!(["test-effect"])
-    );
-    // GR IV has Framing, so Framing alone without effects shows a menu.
-    let framing = Selection::from_names(["framing"]).unwrap();
+    .unwrap()
+    .bytes;
+    assert_eq!(verify_package(&bytes).unwrap().effect_ids, ["test-effect"]);
+    // Date Imprint alone without effects shows a menu.
     assert!(assemble(
-        &runtime,
-        &gr4_build(),
-        &Files::new(),
-        framing,
+        &gr4_runtimes(),
+        &EffectSet::default(),
+        &[testing::module("DATE")],
         &camera::GR4,
         &english()
     )
     .is_ok());
-    let image_control = Selection::from_names(["image-control"]).unwrap();
     assert!(assemble(
-        &runtime,
-        &gr4_build(),
-        &Files::new(),
-        image_control,
+        &gr4_runtimes(),
+        &EffectSet::default(),
+        &[testing::module("FILMLOOK")],
         &camera::GR4,
         &english()
     )
@@ -829,4 +795,351 @@ fn scripts_off_packages_hold_only_the_disable_command_and_its_key() {
         // It holds no GRKit code, so it is not a GRKit package.
         assert!(verify_package(&bytes).is_err());
     }
+}
+
+#[test]
+fn dump_packages_hold_the_tool_files_and_their_checksums() {
+    let contents: Files = DUMP_FILES
+        .iter()
+        .map(|name| ((*name).to_owned(), name.as_bytes().to_vec()))
+        .collect();
+    let bytes = assemble_dump(contents.clone()).unwrap();
+    assert_eq!(bytes, assemble_dump(contents.clone()).unwrap());
+    let files = unpack(&bytes);
+    let mut expected: Vec<_> = DUMP_FILES.iter().copied().chain(["SHA256SUMS"]).collect();
+    expected.sort();
+    assert_eq!(
+        files.keys().map(String::as_str).collect::<Vec<_>>(),
+        expected
+    );
+    let sums = String::from_utf8(files["SHA256SUMS"].clone()).unwrap();
+    for name in DUMP_FILES {
+        assert!(sums.contains(&format!("{}  {name}", sha256(name.as_bytes()))));
+    }
+    // The program and the script are executable on the card.
+    let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    for (name, mode) in [
+        ("SD_ROOT/SCRIPT/GRDUMP/DUMP.BIN", 0o755),
+        ("SD_ROOT/SCRIPT/GRDUMP/DUMP.SH", 0o755),
+        ("README.txt", 0o644),
+    ] {
+        assert_eq!(
+            archive.by_name(name).unwrap().unix_mode().unwrap() & 0o777,
+            mode
+        );
+    }
+    // A missing, empty, or extra file is refused.
+    let mut missing = contents.clone();
+    missing.remove("README.txt");
+    assert!(assemble_dump(missing).is_err());
+    let mut empty = contents.clone();
+    empty.insert("SD_ROOT/SCRIPT/GRDUMP/DUMP.BIN".into(), Vec::new());
+    assert!(assemble_dump(empty).is_err());
+    let mut extra = contents;
+    extra.insert("SD_ROOT/SCRIPT/STARTUP.BAK".into(), b"x".to_vec());
+    assert!(assemble_dump(extra).is_err());
+}
+
+/// A GR IV package has the installer of each GR IV build, in release order,
+/// and the script that selects one at each power-on. A GR III package keeps
+/// the single installer and script of earlier packages.
+/// INSTALL.SH of a package with several builds tries the core of the last
+/// start first, and keeps the core that installed. A record of another build,
+/// after a firmware update, or of a name that the package does not hold, only
+/// costs the check of that core.
+#[cfg(unix)]
+#[test]
+fn install_tries_the_core_of_the_last_start_first() {
+    let files = unpack(
+        &assemble(
+            &gr4_runtimes(),
+            &EffectSet::default(),
+            &testing::official_modules(),
+            &camera::GR4,
+            &english(),
+        )
+        .unwrap()
+        .bytes,
+    );
+    let card = tempfile::tempdir().unwrap();
+    let root = card.path().to_str().unwrap();
+    let script = String::from_utf8(files["SD_ROOT/SCRIPT/GRKIT/INSTALL.SH"].clone())
+        .unwrap()
+        .replace("/media/storage1", root)
+        .replace("</proc/uptime", "</dev/null");
+    let package = card.path().join("SCRIPT/GRKIT");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::create_dir_all(card.path().join("GRKIT")).unwrap();
+    std::fs::write(package.join("INSTALL.SH"), script).unwrap();
+    // A stand-in core: it logs its run and installs only on its build.
+    for (index, build) in ["1.11", "1.20", "0528"].iter().enumerate() {
+        let core = package.join(format!("CORE{}.BIN", index + 1));
+        std::fs::write(
+            &core,
+            format!(
+                "#!/bin/sh\necho CORE{} $1 >>{root}/RUNS\n[ \"$BUILD\" = {build} ] && exit 0\nexit 48\n",
+                index + 1
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&core, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let start = |build: &str| {
+        let _ = std::fs::remove_file(card.path().join("RUNS"));
+        let output = std::process::Command::new("sh")
+            .arg(package.join("INSTALL.SH"))
+            .env("BUILD", build)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let runs = std::fs::read_to_string(card.path().join("RUNS")).unwrap_or_default();
+        let record =
+            std::fs::read_to_string(card.path().join("GRKIT/CORE.TXT")).unwrap_or_default();
+        (runs, record)
+    };
+    // The first start tries each core in order and keeps the one that installed.
+    assert_eq!(
+        start("0528"),
+        (
+            "CORE1 --known\nCORE2 --known\nCORE3 --known\n".into(),
+            "CORE3.BIN\n".into()
+        )
+    );
+    // The next start runs only that core.
+    assert_eq!(
+        start("0528"),
+        ("CORE3 --known\n".into(), "CORE3.BIN\n".into())
+    );
+    // After a firmware update, the kept core is checked once, then the others.
+    assert_eq!(
+        start("1.20"),
+        (
+            "CORE3 --known\nCORE1 --known\nCORE2 --known\n".into(),
+            "CORE2.BIN\n".into()
+        )
+    );
+    // A record that names no core of the package runs nothing of it.
+    std::fs::write(card.path().join("GRKIT/CORE.TXT"), "../../bin/sh\n").unwrap();
+    assert_eq!(
+        start("1.11"),
+        ("CORE1 --known\n".into(), "CORE1.BIN\n".into())
+    );
+    // A build that no core names keeps the record and goes on to --try.
+    let (runs, record) = start("2.00");
+    assert!(
+        runs.starts_with("CORE1 --known\nCORE2 --known\nCORE3 --known\nCORE1 --try\n"),
+        "{runs}"
+    );
+    assert_eq!(record, "CORE1.BIN\n");
+}
+
+#[test]
+fn a_package_holds_the_core_file_of_each_build_of_its_camera() {
+    let gr4 = |runtimes: &[VerifiedRuntime]| {
+        assemble(
+            runtimes,
+            &EffectSet::default(),
+            &testing::official_modules(),
+            &camera::GR4,
+            &english(),
+        )
+        .map(|package| package.bytes)
+    };
+    let bytes = gr4(&gr4_runtimes()).unwrap();
+    assert_eq!(
+        verify_package(&bytes).unwrap().targets,
+        ["gr4-1.11", "gr4-1.20", "gr4-1.20-0528"]
+    );
+    let files = unpack(&bytes);
+    for (path, target) in [
+        ("SD_ROOT/SCRIPT/GRKIT/CORE1.BIN", "gr4-1.11"),
+        ("SD_ROOT/SCRIPT/GRKIT/CORE2.BIN", "gr4-1.20"),
+        ("SD_ROOT/SCRIPT/GRKIT/CORE3.BIN", "gr4-1.20-0528"),
+    ] {
+        assert_eq!(files[path], testing::marked_installer(target), "{path}");
+    }
+    // Each script runs its body between two lines of the boot log, and the
+    // first SCAN.SH of a power-on also starts the log of the start.
+    let wrapped = |script: &[u8], mode: &str, body: &str| {
+        let script = String::from_utf8(script.to_vec()).unwrap();
+        let log = "/media/storage1/GRKIT/BOOT.TXT";
+        let expected = format!(
+            "read t _ </proc/uptime; echo \"$t {mode}-start\" >>{log}\n{body}\
+             read t _ </proc/uptime; echo \"$t {mode} $status\" >>{log}\n\
+             echo GR_MODULE_{}_EXIT_$status\nexit 0\n",
+            mode.to_uppercase()
+        );
+        assert!(script.ends_with(&expected), "{script}");
+        let start = &script[..script.len() - expected.len()];
+        if mode == "scan" {
+            assert!(
+                start.starts_with(
+                    "mkdir -p /media/storage1/GRKIT\nif [ ! -e /tmp/grkit-boot ]; then\n"
+                ),
+                "{script}"
+            );
+            assert!(
+                start.contains("echo \"$t load\" >>/media/storage1/GRKIT/BOOT.TXT\n"),
+                "{script}"
+            );
+        } else {
+            assert_eq!(start, "", "{script}");
+        }
+    };
+    wrapped(
+        &files["SD_ROOT/SCRIPT/GRKIT/INSTALL.SH"],
+        "install",
+        "k=/media/storage1/GRKIT/CORE.TXT\n\
+         last=; [ -e $k ] && read last _ <$k\n\
+         status=48; used=\n\
+         case \" CORE1.BIN CORE2.BIN CORE3.BIN \" in *\" $last \"*) /media/storage1/SCRIPT/GRKIT/$last --known; status=$?; used=$last ;; esac\n\
+         if [ $status = 48 ]; then\n\
+         \x20 for core in CORE1.BIN CORE2.BIN CORE3.BIN; do\n\
+         \x20   [ \"$core\" = \"$last\" ] && continue\n\
+         \x20   /media/storage1/SCRIPT/GRKIT/$core --known\n\
+         \x20   status=$?; used=$core\n\
+         \x20   case $status in 48) ;; *) break ;; esac\n\
+         \x20 done\n\
+         fi\n\
+         [ $status = 0 ] && [ \"$used\" != \"$last\" ] && echo $used >$k\n\
+         case $status in 48)\n\
+         \x20 for core in CORE1.BIN CORE2.BIN; do\n\
+         \x20   /media/storage1/SCRIPT/GRKIT/$core --try\n\
+         \x20   status=$?\n\
+         \x20   case $status in 47) ;; *) break ;; esac\n\
+         \x20 done\n\
+         \x20 case $status in 47) /media/storage1/SCRIPT/GRKIT/CORE3.BIN --install; status=$? ;; esac\n\
+         \x20 ;;\n\
+         esac\n",
+    );
+    // The first core file scans: the plan is the same for each build. First
+    // the script looks up the other core files.
+    wrapped(
+        &files["SD_ROOT/SCRIPT/GRKIT/SCAN.SH"],
+        "scan",
+        "for core in CORE2.BIN CORE3.BIN; do [ -e /media/storage1/SCRIPT/GRKIT/$core ]; done\n\
+         /media/storage1/SCRIPT/GRKIT/CORE1.BIN --scan\n\
+         status=$?\n",
+    );
+    let gr3 = unpack(&package());
+    wrapped(
+        &gr3["SD_ROOT/SCRIPT/GRKIT/SCAN.SH"],
+        "scan",
+        "/media/storage1/SCRIPT/GRKIT/CORE.BIN --scan\nstatus=$?\n",
+    );
+    wrapped(
+        &gr3["SD_ROOT/SCRIPT/GRKIT/INSTALL.SH"],
+        "install",
+        "/media/storage1/SCRIPT/GRKIT/CORE.BIN --install\nstatus=$?\n",
+    );
+    assert!(gr3.contains_key("SD_ROOT/SCRIPT/GRKIT/CORE.BIN"));
+    assert!(!gr3.contains_key("SD_ROOT/SCRIPT/GRKIT/CORE1.BIN"));
+
+    // Each build, in release order.
+    let mut runtimes = gr4_runtimes();
+    runtimes.swap(1, 2);
+    assert!(format!("{:#}", gr4(&runtimes).unwrap_err()).contains("in release order"));
+    let single = gr4(&gr4_runtimes()[..1]).unwrap();
+    assert_eq!(verify_package(&single).unwrap().targets, ["gr4-1.11"]);
+    // A GR III runtime does not run on GR IV.
+    assert!(gr4(&[runtime()]).is_err());
+    // The installer and the build manifest must name the same build.
+    let files = testing::runtime_files(&testing::marked_installer("gr4-1.20"), "gr4-1.20");
+    let error = load_runtime(&testing::manifest("gr4-1.11", &files), &files).unwrap_err();
+    assert!(error.to_string().contains("is the gr4-1.20 runtime"));
+
+    // A package whose core files are swapped or missing is refused.
+    let mut swapped = files_of(&bytes);
+    let first = swapped["SD_ROOT/SCRIPT/GRKIT/CORE1.BIN"].clone();
+    let second = swapped["SD_ROOT/SCRIPT/GRKIT/CORE2.BIN"].clone();
+    swapped.insert("SD_ROOT/SCRIPT/GRKIT/CORE1.BIN".into(), second);
+    swapped.insert("SD_ROOT/SCRIPT/GRKIT/CORE2.BIN".into(), first);
+    assert!(validate_contents(&with_sums(swapped)).is_err());
+    let mut missing = files_of(&bytes);
+    missing.remove("SD_ROOT/SCRIPT/GRKIT/CORE3.BIN");
+    assert!(validate_contents(&with_sums(missing)).is_err());
+}
+
+/// The entries of a package without its checksums.
+fn files_of(bytes: &[u8]) -> Files {
+    let mut files = unpack(bytes);
+    files.remove("SHA256SUMS");
+    files
+}
+
+/// A package puts its effects in the inbox of SCRIPT/GRKIT and lists its
+/// effect and module files in PACKAGE.TXT. No package file is in GRKIT, the
+/// data folder.
+#[test]
+fn packages_list_their_files_and_keep_out_of_the_data_folder() {
+    let files = unpack(&package());
+    let effects: Vec<_> = files
+        .keys()
+        .filter_map(|name| name.strip_prefix("SD_ROOT/SCRIPT/GRKIT/EFFECTS/"))
+        .collect();
+    assert_eq!(effects.len(), 1);
+    assert!(files.keys().all(|name| !name.starts_with("SD_ROOT/GRKIT/")));
+    let list = String::from_utf8(files["SD_ROOT/SCRIPT/GRKIT/PACKAGE.TXT"].clone()).unwrap();
+    assert!(list.lines().any(|line| line == effects[0]));
+    assert!(list.lines().any(|line| line.ends_with(".GRM")));
+    let mut wrong = files.clone();
+    wrong.insert("SD_ROOT/SCRIPT/GRKIT/PACKAGE.TXT".into(), b"".to_vec());
+    assert!(validate_contents(&with_sums(wrong)).is_err());
+}
+
+#[test]
+fn module_files_install_from_the_modules_folder() {
+    let package = assemble(
+        &[runtime()],
+        &EffectSet::default(),
+        &[testing::module("GUIDES")],
+        &camera::GR3,
+        &english(),
+    )
+    .unwrap();
+    // A module shows a page, so a package with only a module is valid.
+    assert_eq!(package.contents.modules, ["GUIDES"]);
+    let files = unpack(&package.bytes);
+    assert!(files.contains_key("SD_ROOT/SCRIPT/GRKIT/MODULES/GUIDES.GRM"));
+    // The file name is the module ID, and the file must decode.
+    let mut renamed = files.clone();
+    let module = renamed
+        .remove("SD_ROOT/SCRIPT/GRKIT/MODULES/GUIDES.GRM")
+        .unwrap();
+    renamed.insert("SD_ROOT/SCRIPT/GRKIT/MODULES/OTHER.GRM".into(), module);
+    assert!(validate_contents(&with_sums(renamed)).is_err());
+    let mut broken = files.clone();
+    broken.insert(
+        "SD_ROOT/SCRIPT/GRKIT/MODULES/GUIDES.GRM".into(),
+        b"GRKM".to_vec(),
+    );
+    assert!(validate_contents(&with_sums(broken)).is_err());
+    // The same module cannot be in a package twice.
+    assert!(assemble(
+        &[runtime()],
+        &EffectSet::default(),
+        &[testing::module("GUIDES"), testing::module("GUIDES")],
+        &camera::GR3,
+        &english(),
+    )
+    .is_err());
+    // GRKit lists at most MODULES_MAX modules, so a package holds no more.
+    let ids: Vec<String> = (0..=grkit_core::runtime::MODULES_MAX)
+        .map(|n| format!("MOD{n}"))
+        .collect();
+    let modules: Vec<_> = ids.iter().map(|id| testing::module(id)).collect();
+    let package = |modules: &[Vec<u8>]| {
+        assemble(
+            &[runtime()],
+            &EffectSet::default(),
+            modules,
+            &camera::GR3,
+            &english(),
+        )
+    };
+    assert!(package(&modules[..grkit_core::runtime::MODULES_MAX]).is_ok());
+    let error = package(&modules).unwrap_err();
+    let limit = format!("at most {} modules", grkit_core::runtime::MODULES_MAX);
+    assert!(error.to_string().contains(&limit), "{error}");
 }
